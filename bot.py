@@ -1,4 +1,3 @@
-# bot.py
 import discord
 from discord.ext import commands, tasks
 from openai import OpenAI
@@ -7,6 +6,7 @@ from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 import json
+import traceback
 
 load_dotenv()
 
@@ -106,9 +106,17 @@ async def add_task(
         
         tasks_list = json.loads(response_text.strip())
         
+        print(f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print(f"📋 プロジェクト: {プロジェクト名}")
+        print(f"📅 最終締切: {締切日}")
+        print(f"📊 生成されたタスク数: {len(tasks_list)}")
+        print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+        
         created_count = 0
         for task in tasks_list:
             try:
+                print(f"⏳ タスク作成中: {task['task_name']} → {task['deadline']}")
+                
                 notion.pages.create(
                     parent={"database_id": NOTION_DB_ID},
                     properties={
@@ -130,9 +138,22 @@ async def add_task(
                     }
                 )
                 created_count += 1
-            except Exception as e:
-                print(f"Notion エラー: {e}")
+                print(f"   ✅ 作成成功: {task['task_name']}")
+                
+            except KeyError as e:
+                print(f"   ❌ キーエラー [{task.get('task_name', 'Unknown')}]: {str(e)}")
+                print(f"      タスク内容: {task}")
+                traceback.print_exc()
                 continue
+            except Exception as e:
+                print(f"   ❌ Notion エラー [{task.get('task_name', 'Unknown')}]: {type(e).__name__}")
+                print(f"      詳細: {str(e)}")
+                traceback.print_exc()
+                continue
+        
+        print(f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print(f"📊 結果: {created_count}/{len(tasks_list)} 個作成成功")
+        print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
         
         embed = discord.Embed(
             title="✅ プロジェクト自動分解完了！",
@@ -151,11 +172,22 @@ async def add_task(
             inline=False
         )
         
+        if created_count != len(tasks_list):
+            embed.add_field(
+                name="⚠️ 注意",
+                value=f"{len(tasks_list) - created_count} 個のタスク作成に失敗しました。\nコンソールを確認してください。",
+                inline=False
+            )
+        
         await interaction.followup.send(embed=embed)
         
     except json.JSONDecodeError as e:
+        print(f"❌ JSON パースエラー: {str(e)}")
         await interaction.followup.send(f"❌ AI の応答をパースできませんでした\n{str(e)}")
     except Exception as e:
+        print(f"❌ メインエラー: {type(e).__name__}")
+        print(f"   詳細: {str(e)}")
+        traceback.print_exc()
         await interaction.followup.send(f"❌ エラー: {str(e)}")
 
 @tasks.loop(hours=24)
@@ -268,6 +300,7 @@ async def daily_report():
         
     except Exception as e:
         print(f"レポートエラー: {e}")
+        traceback.print_exc()
         await channel.send(f"❌ レポート生成エラー: {str(e)}")
 
 @daily_report.before_loop
