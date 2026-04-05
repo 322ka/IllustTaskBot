@@ -31,13 +31,23 @@ WORKFLOW_STEPS = [
 async def on_ready():
     print(f'{bot.user} がログインしました')
     try:
+        # 既存コマンドをクリア（重要！）
+        await bot.tree.sync()
+        
         synced = await bot.tree.sync()
         print(f"✅ スラッシュコマンド {len(synced)} 個を同期しました")
+        
+        # 全コマンドをリスト表示
         for cmd in bot.tree.get_commands():
-            print(f"  - /{cmd.name}")  # ← コマンド一覧を表示
+            print(f"  - /{cmd.name}: {cmd.description}")
+            
     except Exception as e:
         print(f"❌ 同期エラー: {e}")
+        import traceback
+        traceback.print_exc()  # ← 詳細エラーを表示
+    
     daily_report.start()
+
 
 
 @bot.tree.command(name="task", description="新しいイラストプロジェクトを追加")
