@@ -32,10 +32,13 @@ async def on_ready():
     print(f'{bot.user} がログインしました')
     try:
         synced = await bot.tree.sync()
-        print(f"スラッシュコマンド {len(synced)} 個を同期しました")
+        print(f"✅ スラッシュコマンド {len(synced)} 個を同期しました")
+        for cmd in bot.tree.get_commands():
+            print(f"  - /{cmd.name}")  # ← コマンド一覧を表示
     except Exception as e:
-        print(e)
+        print(f"❌ 同期エラー: {e}")
     daily_report.start()
+
 
 @bot.tree.command(name="task", description="新しいイラストプロジェクトを追加")
 async def add_task(
