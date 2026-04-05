@@ -13,7 +13,7 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 NOTION_TOKEN = os.getenv('NOTION_TOKEN')
-NOTION_DB_ID = '88a15e851b9e40c8a488d9d58cc5931c'
+NOTION_DB_ID = '3bb718f43aa84f11a970f73e282eb5e9'
 REPORT_CHANNEL_ID = int(os.getenv('REPORT_CHANNEL_ID', '0'))
 
 intents = discord.Intents.default()
@@ -31,24 +31,11 @@ WORKFLOW_STEPS = [
 async def on_ready():
     print(f'{bot.user} がログインしました')
     try:
-        # 既存コマンドをクリア（重要！）
-        await bot.tree.sync()
-        
         synced = await bot.tree.sync()
-        print(f"✅ スラッシュコマンド {len(synced)} 個を同期しました")
-        
-        # 全コマンドをリスト表示
-        for cmd in bot.tree.get_commands():
-            print(f"  - /{cmd.name}: {cmd.description}")
-            
+        print(f"スラッシュコマンド {len(synced)} 個を同期しました")
     except Exception as e:
-        print(f"❌ 同期エラー: {e}")
-        import traceback
-        traceback.print_exc()  # ← 詳細エラーを表示
-    
+        print(e)
     daily_report.start()
-
-
 
 @bot.tree.command(name="task", description="新しいイラストプロジェクトを追加")
 async def add_task(
