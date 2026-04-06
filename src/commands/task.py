@@ -7,16 +7,39 @@ from datetime import datetime
 from typing import Any, Callable
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from src.services.db_service import get_current_event
-from src.services.notion_service import ensure_fanfic_page, ensure_select_option
+from src.services.notion_service import (
+    ensure_fanfic_page,
+    ensure_select_option,
+    schedule_task_exists,
+)
 
 
 EVENT_REQUIRED_MESSAGE = (
     "イベント名が指定されていません。先に /event で設定するか、"
     "/task に event_name を指定してください。"
 )
+
+WORK_CATEGORY_CHOICES = [
+    app_commands.Choice(name="FA", value="FA"),
+    app_commands.Choice(name="イベント準備", value="イベント準備"),
+    app_commands.Choice(name="依頼", value="依頼"),
+    app_commands.Choice(name="その他", value="その他"),
+]
+
+WORK_TYPE_CHOICES = [
+    app_commands.Choice(name="グッズ", value="グッズ"),
+    app_commands.Choice(name="同人誌", value="同人誌"),
+    app_commands.Choice(name="ノベルティ", value="ノベルティ"),
+    app_commands.Choice(name="ディスプレイ", value="ディスプレイ"),
+    app_commands.Choice(name="立ち絵", value="立ち絵"),
+    app_commands.Choice(name="1枚絵", value="1枚絵"),
+    app_commands.Choice(name="SD", value="SD"),
+    app_commands.Choice(name="その他", value="その他"),
+]
 
 
 def resolve_event_name(explicit_event_name: str | None, user_id: str) -> str | None:
@@ -41,13 +64,24 @@ def register_task_command(
     notion_prop_done: str,
 ) -> None:
     @bot.tree.command(name="task", description="新しいイラストプロジェクトを追加")
+    @app_commands.describe(
+        作品名="作品名を入力してください",
+        締切日="締切日を YYYY-MM-DD 形式で入力してください",
+        作業種別="SCHEDULE DB のカテゴリに対応する作業種別です",
+        作品種別="FANFIC DB の分類タグに対応する作品種別です",
+        イベント名="未入力の場合は /event で設定した現在イベントを使います",
+    )
+    @app_commands.choices(
+        作業種別=WORK_CATEGORY_CHOICES,
+        作品種別=WORK_TYPE_CHOICES,
+    )
     async def add_task(
         interaction: discord.Interaction,
-        プロジェクト名: str,
+        作品名: str,
         締切日: str,
-        work_category: str,
-        work_type: str,
-        event_name: str | None = None,
+        作業種別: app_commands.Choice[str],
+        作品種別: app_commands.Choice[str],
+        イベント名: str | None = None,
     ):
         await interaction.response.defer()
 
@@ -61,7 +95,7 @@ def register_task_command(
                 return
 
             resolved_event_name = resolve_event_name(
-                explicit_event_name=event_name,
+                explicit_event_name=イベント名,
                 user_id=str(interaction.user.id),
             )
             if not resolved_event_name:
@@ -71,10 +105,10 @@ def register_task_command(
             prompt = f"""あなたはイラストレーターのプロジェクトマネージャーです。
 
 【プロジェクト情報】
-- プロジェクト名: {プロジェクト名}
+- 作品名: {作品名}
 - 最終締切: {締切日}
-- 作業種別: {work_category}
-- 作品種別: {work_type}
+- 作業種別: {作業種別.value}
+- 作品種別: {作品種別.value}
 
 【ワークフロー（順序は固定）】
 1. 情報収集
@@ -134,7 +168,7 @@ def register_task_command(
             tasks_list = json.loads(cleaned_response_text)
 
             print(f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            print(f"📋 プロジェクト: {プロジェクト名}")
+            print(f"📋 作品名: {作品名}")
             print(f"📅 最終締切: {締切日}")
             print(f"🎪 イベント名: {resolved_event_name}")
             print(f"📊 生成されたタスク数: {len(tasks_list)}")
@@ -149,6 +183,7 @@ def register_task_command(
             print(f"🧩 Notion title property: {title_property_name}")
 
             created_count = 0
+            skipped_duplicate_count = 0
             warning_messages = []
             sync_messages = []
 
@@ -157,14 +192,14 @@ def register_task_command(
                     notion=notion,
                     database_id=resolved_notion_db_id,
                     property_name=notion_prop_work_title,
-                    option_name=プロジェクト名,
+                    option_name=作品名,
                 )
-                select_options.setdefault(notion_prop_work_title, set()).add(プロジェクト名)
+                select_options.setdefault(notion_prop_work_title, set()).add(作品名)
                 if work_title_sync_result == "added":
                     sync_messages.append("SCHEDULE同期: 作品タイトル候補を追加しました。")
             except Exception as schedule_work_title_error:
                 warning_messages.append(
-                    f"{notion_prop_work_title}: '{プロジェクト名}' の候補同期に失敗 ({schedule_work_title_error})"
+                    f"{notion_prop_work_title}: '{作品名}' の候補同期に失敗 ({schedule_work_title_error})"
                 )
 
             try:
@@ -197,7 +232,7 @@ def register_task_command(
                         notion=notion,
                         database_id=resolved_fanfic_database_id,
                         property_name="分類タグ",
-                        option_name=work_type,
+                        option_name=作品種別.value,
                     )
                     if fanfic_category_sync_result == "added":
                         sync_messages.append("FANFIC同期: 分類タグ候補を追加しました。")
@@ -205,9 +240,9 @@ def register_task_command(
                     fanfic_result, fanfic_title_property_name, fanfic_warnings = ensure_fanfic_page(
                         notion=notion,
                         database_id=resolved_fanfic_database_id,
-                        work_title=プロジェクト名,
+                        work_title=作品名,
                         event_name=resolved_event_name,
-                        category_name=work_type,
+                        category_name=作品種別.value,
                     )
                     if fanfic_result == "created":
                         sync_messages.append(
@@ -226,10 +261,25 @@ def register_task_command(
             for task in tasks_list:
                 try:
                     print(f"⏳ タスク作成中: {task['task_name']} → {task['deadline']}")
+                    schedule_title = f"{resolved_event_name}：{task['task_name']}"
+
+                    if schedule_task_exists(
+                        notion=notion,
+                        database_id=resolved_notion_db_id,
+                        title_property_name=title_property_name,
+                        title_value=schedule_title,
+                        work_title_property_name=notion_prop_work_title,
+                        work_title_value=作品名,
+                        event_property_name=notion_prop_event,
+                        event_value=resolved_event_name,
+                    ):
+                        skipped_duplicate_count += 1
+                        print(f"   ℹ️ 重複スキップ: {schedule_title}")
+                        continue
 
                     properties = {
                         title_property_name: {
-                            "title": [{"text": {"content": f"{resolved_event_name}：{task['task_name']}"}}]
+                            "title": [{"text": {"content": schedule_title}}]
                         },
                         notion_prop_schedule_date: {
                             "date": {"start": task["deadline"]}
@@ -240,13 +290,13 @@ def register_task_command(
                     }
 
                     category_prop = build_select_property(
-                        notion_prop_category, work_category, select_options, warning_messages
+                        notion_prop_category, 作業種別.value, select_options, warning_messages
                     )
                     if category_prop:
                         properties[notion_prop_category] = category_prop
 
                     work_title_prop = build_select_property(
-                        notion_prop_work_title, プロジェクト名, select_options, warning_messages
+                        notion_prop_work_title, 作品名, select_options, warning_messages
                     )
                     if work_title_prop:
                         properties[notion_prop_work_title] = work_title_prop
@@ -282,7 +332,7 @@ def register_task_command(
 
             embed = discord.Embed(
                 title="✅ プロジェクト自動分解完了！",
-                description=f"**{プロジェクト名}** を {created_count} 個のタスクに分割しました",
+                description=f"**{作品名}** を {created_count} 個のタスクに分割しました",
                 color=discord.Color.green()
             )
 
@@ -307,7 +357,11 @@ def register_task_command(
             if created_count != len(tasks_list):
                 embed.add_field(
                     name="⚠️ 注意",
-                    value=f"{len(tasks_list) - created_count} 個のタスク作成に失敗しました。\nコンソールを確認してください。",
+                    value=(
+                        f"{len(tasks_list) - created_count - skipped_duplicate_count} 個のタスク作成に失敗しました。\n"
+                        f"{skipped_duplicate_count} 個の重複タスクをスキップしました。\n"
+                        "コンソールを確認してください。"
+                    ),
                     inline=False
                 )
 

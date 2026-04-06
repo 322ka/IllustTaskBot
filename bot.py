@@ -13,6 +13,7 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
 from src.commands.event import register_event_command
+from src.commands.estimate_runtime import register_estimate_command
 from src.commands.task import register_task_command
 from src.services.db_service import init_db
 
@@ -103,6 +104,7 @@ register_event_command(
     event_database_id=EVENT_DB_ID,
     fanfic_database_id=FANFIC_DB_ID,
 )
+register_estimate_command(bot=bot, openai_client=openai_client)
 register_task_command(
     bot=bot,
     openai_client=openai_client,

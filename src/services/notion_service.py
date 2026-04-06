@@ -264,3 +264,42 @@ def ensure_fanfic_page(
         properties=properties,
     )
     return "created", title_property_name, warnings
+
+
+def schedule_task_exists(
+    notion: Any,
+    database_id: str,
+    title_property_name: str,
+    title_value: str,
+    work_title_property_name: str,
+    work_title_value: str,
+    event_property_name: str,
+    event_value: str,
+) -> bool:
+    response = notion.databases.query(
+        database_id=database_id,
+        filter={
+            "and": [
+                {
+                    "property": title_property_name,
+                    "title": {
+                        "equals": title_value,
+                    },
+                },
+                {
+                    "property": work_title_property_name,
+                    "select": {
+                        "equals": work_title_value,
+                    },
+                },
+                {
+                    "property": event_property_name,
+                    "select": {
+                        "equals": event_value,
+                    },
+                },
+            ]
+        },
+        page_size=1,
+    )
+    return bool(response.get("results"))
