@@ -1,30 +1,44 @@
+import os
+import traceback
+from datetime import datetime, timedelta
+
 import discord
 from discord.ext import commands, tasks
-from openai import OpenAI
-from notion_client import Client
-from datetime import datetime, timedelta
-import os
 from dotenv import load_dotenv
-import json
-import traceback
+from notion_client import Client
+from openai import OpenAI
+
+from src.commands.event import register_event_command
+from src.commands.task import register_task_command
+from src.services.db_service import init_db
 
 load_dotenv()
+init_db()
 
-DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-NOTION_TOKEN = os.getenv('NOTION_TOKEN')
-NOTION_DB_ID = '3bb718f43aa84f11a970f73e282eb5e9'
-REPORT_CHANNEL_ID = int(os.getenv('REPORT_CHANNEL_ID', '0'))
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+NOTION_TOKEN = os.getenv("NOTION_TOKEN")
+NOTION_DB_ID = os.getenv("NOTION_DATABASE_ID")
+REPORT_CHANNEL_ID = int(os.getenv("REPORT_CHANNEL_ID", "0"))
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 notion = Client(auth=NOTION_TOKEN)
 
 WORKFLOW_STEPS = [
-    "情報収集", "イメージ策定", "大ラフ", "詳細ラフ",
-    "カラーラフ", "下書き", "線画", "色分け", "着彩", "修正", "仕上げ"
+    "情報収集",
+    "イメージ策定",
+    "大ラフ",
+    "詳細ラフ",
+    "カラーラフ",
+    "下書き",
+    "線画",
+    "色分け",
+    "着彩",
+    "修正",
+    "仕上げ",
 ]
 
 NOTION_PROP_SCHEDULE_DATE = "予定"
@@ -63,7 +77,7 @@ def build_select_property(
     property_name: str,
     value: str | None,
     select_options: dict[str, set[str]],
-    warnings: list[str]
+    warnings: list[str],
 ) -> dict | None:
     """select の値が存在する場合のみ Notion 用 property を返す。"""
     if not value:
@@ -77,197 +91,31 @@ def build_select_property(
     return {"select": {"name": value}}
 
 
+register_event_command(bot)
+register_task_command(
+    bot=bot,
+    openai_client=openai_client,
+    notion=notion,
+    notion_db_id=NOTION_DB_ID,
+    get_database_schema_config=get_database_schema_config,
+    build_select_property=build_select_property,
+    notion_prop_schedule_date=NOTION_PROP_SCHEDULE_DATE,
+    notion_prop_category=NOTION_PROP_CATEGORY,
+    notion_prop_event=NOTION_PROP_EVENT,
+    notion_prop_work_title=NOTION_PROP_WORK_TITLE,
+    notion_prop_done=NOTION_PROP_DONE,
+)
+
+
 @bot.event
 async def on_ready():
-    print(f'{bot.user} がログインしました')
+    print(f"{bot.user} がログインしました")
     try:
         synced = await bot.tree.sync()
         print(f"スラッシュコマンド {len(synced)} 個を同期しました")
     except Exception as e:
         print(e)
     daily_report.start()
-
-
-@bot.tree.command(name="task", description="新しいイラストプロジェクトを追加")
-async def add_task(
-    interaction: discord.Interaction,
-    プロジェクト名: str,
-    締切日: str,
-    種類: str = "依頼"
-):
-    await interaction.response.defer()
-
-    try:
-        try:
-            datetime.strptime(締切日, "%Y-%m-%d")
-        except ValueError:
-            await interaction.followup.send(
-                "❌ 日付形式が正しくありません。\n形式: YYYY-MM-DD（例：2025-03-15）"
-            )
-            return
-
-        prompt = f"""あなたはイラストレーターのプロジェクトマネージャーです。
-
-【プロジェクト情報】
-- プロジェクト名: {プロジェクト名}
-- 最終締切: {締切日}
-- 種類: {種類}
-
-【ワークフロー（順序は固定）】
-1. 情報収集
-2. イメジ策定
-3. 大ラフ
-4. 詳細ラフ
-5. カラーラフ
-6. 下書き
-7. 線画
-8. 色分け
-9. 着彩
-10. 修正
-11. 仕上げ
-
-最終締切（仕上げ）が {締切日} になるように逆算してください。
-各ステップは通常 1-2 日かかるものとします。
-複雑なプロジェクトは時間を多めに見積もってください。
-
-【出力形式】JSON配列のみ（説明文は不要）
-[
-  {{
-    "step": 1,
-    "task_name": "情報収集",
-    "deadline": "YYYY-MM-DD",
-    "description": "クライアント打ち合わせ、資料収集"
-  }},
-  ...全11ステップ
-]
-"""
-
-        response = openai_client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7
-        )
-
-        response_text = response.choices[0].message.content
-
-        if "```json" in response_text:
-            response_text = response_text.split("```json")[1].split("```")[0]
-        elif "```" in response_text:
-            response_text = response_text.split("```")[1].split("```")[0]
-
-        tasks_list = json.loads(response_text.strip())
-
-        print(f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        print(f"📋 プロジェクト: {プロジェクト名}")
-        print(f"📅 最終締切: {締切日}")
-        print(f"📊 生成されたタスク数: {len(tasks_list)}")
-        print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-
-        title_property_name, select_options = get_database_schema_config(NOTION_DB_ID)
-        print(f"🧩 Notion title property: {title_property_name}")
-
-        created_count = 0
-        warning_messages = []
-
-        for task in tasks_list:
-            try:
-                print(f"⏳ タスク作成中: {task['task_name']} → {task['deadline']}")
-
-                properties = {
-                    title_property_name: {
-                        "title": [{"text": {"content": f"{プロジェクト名} / {task['task_name']}"}}]
-                    },
-                    NOTION_PROP_SCHEDULE_DATE: {
-                        "date": {"start": task["deadline"]}
-                    },
-                    NOTION_PROP_DONE: {
-                        "checkbox": False
-                    }
-                }
-
-                category_prop = build_select_property(
-                    NOTION_PROP_CATEGORY, 種類, select_options, warning_messages
-                )
-                if category_prop:
-                    properties[NOTION_PROP_CATEGORY] = category_prop
-
-                work_title_prop = build_select_property(
-                    NOTION_PROP_WORK_TITLE, task.get("task_name"), select_options, warning_messages
-                )
-                if work_title_prop:
-                    properties[NOTION_PROP_WORK_TITLE] = work_title_prop
-
-                event_prop = build_select_property(
-                    NOTION_PROP_EVENT, プロジェクト名, select_options, warning_messages
-                )
-                if event_prop:
-                    properties[NOTION_PROP_EVENT] = event_prop
-
-                notion.pages.create(
-                    parent={"database_id": NOTION_DB_ID},
-                    properties=properties
-                )
-
-                created_count += 1
-                print(f"   ✅ 作成成功: {task['task_name']}")
-
-            except KeyError as e:
-                print(f"   ❌ キーエラー [{task.get('task_name', 'Unknown')}]: {str(e)}")
-                print(f"      タスク内容: {task}")
-                traceback.print_exc()
-                continue
-            except Exception as e:
-                print(f"   ❌ Notion エラー [{task.get('task_name', 'Unknown')}]: {type(e).__name__}")
-                print(f"      詳細: {str(e)}")
-                traceback.print_exc()
-                continue
-
-        print(f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        print(f"📊 結果: {created_count}/{len(tasks_list)} 個作成成功")
-        print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-
-        embed = discord.Embed(
-            title="✅ プロジェクト自動分解完了！",
-            description=f"**{プロジェクト名}** を {created_count} 個のタスクに分割しました",
-            color=discord.Color.green()
-        )
-
-        task_text = "\n".join([
-            f"**{t['task_name']}** → {t['deadline']}"
-            for t in sorted(tasks_list, key=lambda x: x['deadline'])
-        ])
-
-        embed.add_field(
-            name="📋 スケジュール",
-            value=task_text[:1024],
-            inline=False
-        )
-
-        if created_count != len(tasks_list):
-            embed.add_field(
-                name="⚠️ 注意",
-                value=f"{len(tasks_list) - created_count} 個のタスク作成に失敗しました。\nコンソールを確認してください。",
-                inline=False
-            )
-
-        if warning_messages:
-            unique_warnings = sorted(set(warning_messages))
-            embed.add_field(
-                name="ℹ️ Notion設定との不一致",
-                value="\n".join(f"- {message}" for message in unique_warnings)[:1024],
-                inline=False
-            )
-
-        await interaction.followup.send(embed=embed)
-
-    except json.JSONDecodeError as e:
-        print(f"❌ JSON パースエラー: {str(e)}")
-        await interaction.followup.send(f"❌ AI の応答をパースできませんでした\n{str(e)}")
-    except Exception as e:
-        print(f"❌ メインエラー: {type(e).__name__}")
-        print(f"   詳細: {str(e)}")
-        traceback.print_exc()
-        await interaction.followup.send(f"❌ エラー: {str(e)}")
 
 
 @tasks.loop(hours=24)
