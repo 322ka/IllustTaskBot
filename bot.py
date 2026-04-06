@@ -1,6 +1,7 @@
 import os
 import traceback
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import discord
 from discord.ext import commands, tasks
@@ -8,7 +9,8 @@ from dotenv import load_dotenv
 from notion_client import Client
 from openai import OpenAI
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(dotenv_path=BASE_DIR / ".env")
 
 from src.commands.event import register_event_command
 from src.commands.task import register_task_command
