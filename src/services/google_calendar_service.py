@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 
@@ -22,6 +22,25 @@ class GoogleCalendarClientResult:
     client: Any | None
     calendar_id: str
     error: str | None = None
+
+
+@dataclass
+class GoogleCalendarEventSummary:
+    all_day_dates: list[str]
+    semi_all_day_dates: list[str]
+    light_dates: list[str]
+
+    @property
+    def all_day_count(self) -> int:
+        return len(self.all_day_dates)
+
+    @property
+    def semi_all_day_count(self) -> int:
+        return len(self.semi_all_day_dates)
+
+    @property
+    def light_count(self) -> int:
+        return len(self.light_dates)
 
 
 def _import_google_dependencies() -> tuple[Any, Any, Any] | tuple[None, None, None]:
@@ -102,6 +121,111 @@ def build_google_calendar_client(
         )
 
     return GoogleCalendarClientResult(client=client, calendar_id=resolved_calendar_id)
+
+
+def is_all_day_event(event: GoogleCalendarEvent) -> bool:
+    return event.is_all_day
+
+
+def _parse_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    normalized_value = value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized_value)
+    except ValueError:
+        return None
+
+
+def _parse_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def get_event_duration_hours(event: GoogleCalendarEvent) -> float | None:
+    if event.is_all_day:
+        start_date = _parse_date(event.start)
+        end_date = _parse_date(event.end)
+        if not start_date or not end_date:
+            return None
+        return max((end_date - start_date).days * 24.0, 24.0)
+
+    start_dt = _parse_datetime(event.start)
+    end_dt = _parse_datetime(event.end)
+    if not start_dt or not end_dt:
+        return None
+    duration_hours = (end_dt - start_dt).total_seconds() / 3600
+    return max(duration_hours, 0.0)
+
+
+def is_semi_all_day_event(event: GoogleCalendarEvent) -> bool:
+    if event.is_all_day:
+        return False
+    duration_hours = get_event_duration_hours(event)
+    return duration_hours is not None and duration_hours >= 8.0
+
+
+def _enumerate_event_dates(event: GoogleCalendarEvent) -> list[str]:
+    if event.is_all_day:
+        start_date = _parse_date(event.start)
+        end_date = _parse_date(event.end)
+        if not start_date:
+            return []
+        if not end_date or end_date <= start_date:
+            return [start_date.isoformat()]
+        dates: list[str] = []
+        current_date = start_date
+        while current_date < end_date:
+            dates.append(current_date.isoformat())
+            current_date += timedelta(days=1)
+        return dates
+
+    start_dt = _parse_datetime(event.start)
+    end_dt = _parse_datetime(event.end)
+    if not start_dt:
+        return []
+    if not end_dt or end_dt <= start_dt:
+        return [start_dt.date().isoformat()]
+
+    adjusted_end = end_dt - timedelta(microseconds=1)
+    current_date = start_dt.date()
+    final_date = adjusted_end.date()
+    dates: list[str] = []
+    while current_date <= final_date:
+        dates.append(current_date.isoformat())
+        current_date += timedelta(days=1)
+    return dates
+
+
+def summarize_events(events: list[GoogleCalendarEvent]) -> GoogleCalendarEventSummary:
+    all_day_dates: set[str] = set()
+    semi_all_day_dates: set[str] = set()
+    light_dates: set[str] = set()
+
+    for event in events:
+        event_dates = _enumerate_event_dates(event)
+        if not event_dates:
+            continue
+        if is_all_day_event(event):
+            all_day_dates.update(event_dates)
+            continue
+        if is_semi_all_day_event(event):
+            semi_all_day_dates.update(event_dates)
+            continue
+        light_dates.update(event_dates)
+
+    normalized_all_day = sorted(all_day_dates)
+    normalized_semi_all_day = sorted(semi_all_day_dates - all_day_dates)
+    normalized_light = sorted(light_dates - all_day_dates - semi_all_day_dates)
+    return GoogleCalendarEventSummary(
+        all_day_dates=normalized_all_day,
+        semi_all_day_dates=normalized_semi_all_day,
+        light_dates=normalized_light,
+    )
 
 
 def list_events(

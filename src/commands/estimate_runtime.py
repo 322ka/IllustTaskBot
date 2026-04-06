@@ -8,7 +8,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.commands.task import WORK_CATEGORY_CHOICES, WORK_TYPE_CHOICES
-from src.services.google_calendar_service import list_events
+from src.services.google_calendar_service import list_events, summarize_events
 from src.services.estimate_runtime_ai_service import request_estimate_adjustment
 from src.services.estimate_runtime_service import (
     ESTIMATE_EVENT_REQUIRED_MESSAGE,
@@ -63,6 +63,69 @@ def _localize_ai_failure_reason(reason: str) -> str:
     return mapping.get(reason, reason)
 
 
+def _preview_dates(dates: list[str]) -> str:
+    return ", ".join(dates[:5])
+
+
+def _build_calendar_commentary_suffix(
+    *,
+    all_day_count: int,
+    semi_all_day_count: int,
+    light_count: int,
+) -> str:
+    parts: list[str] = []
+    if all_day_count:
+        parts.append(f"終日予定が{all_day_count}日")
+    if semi_all_day_count:
+        parts.append(f"準終日予定が{semi_all_day_count}日")
+    if light_count:
+        parts.append(f"軽い予定が{light_count}日")
+    if not parts:
+        return ""
+    return "カレンダー上で" + "、".join(parts) + "あります。"
+
+
+def _apply_calendar_pressure_to_commentary(
+    *,
+    base_commentary: str,
+    all_day_count: int,
+    semi_all_day_count: int,
+    light_count: int,
+) -> str:
+    if "締切を過ぎています" in base_commentary:
+        return base_commentary
+
+    severity = 0
+    if "厳しめです" in base_commentary:
+        severity = 2
+    elif "ややタイトです" in base_commentary:
+        severity = 1
+
+    if all_day_count >= 2:
+        severity += 1
+    if all_day_count >= 4:
+        severity += 1
+    if semi_all_day_count >= 1:
+        severity += 1
+
+    severity = min(severity, 2)
+    if severity >= 2:
+        adjusted_commentary = "厳しめです。優先順位の整理とバッファ確保をおすすめします。"
+    elif severity == 1:
+        adjusted_commentary = "ややタイトですが調整可能です。"
+    else:
+        adjusted_commentary = "余裕ありです。バッファを取りやすい見積です。"
+
+    suffix = _build_calendar_commentary_suffix(
+        all_day_count=all_day_count,
+        semi_all_day_count=semi_all_day_count,
+        light_count=light_count,
+    )
+    if suffix:
+        return f"{adjusted_commentary} {suffix}"
+    return adjusted_commentary
+
+
 def _build_calendar_note(
     *,
     due_date: datetime.date,
@@ -81,30 +144,29 @@ def _build_calendar_note(
         print(f"estimate.calendar skipped: {error}")
         return None, error
 
-    all_day_dates: list[str] = []
-    timed_dates: list[str] = []
-    for event in events:
-        date_label = event.start.split("T")[0]
-        if event.is_all_day:
-            all_day_dates.append(date_label)
-        else:
-            timed_dates.append(date_label)
-
-    unique_all_day = sorted(set(all_day_dates))
-    unique_timed = sorted(set(timed_dates))
-    if not unique_all_day and not unique_timed:
+    summary = summarize_events(events)
+    if (
+        summary.all_day_count == 0
+        and summary.semi_all_day_count == 0
+        and summary.light_count == 0
+    ):
         return "\u671f\u9593\u4e2d\u306e\u5927\u304d\u306a\u4e88\u5b9a\u306f\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3067\u3057\u305f\u3002", None
 
     note_parts: list[str] = []
-    if unique_all_day:
-        days = ", ".join(unique_all_day[:5])
+    if summary.all_day_count:
+        days = _preview_dates(summary.all_day_dates)
         note_parts.append(
-            f"\u7d42\u65e5\u4e88\u5b9a\u304c {len(unique_all_day)} \u65e5\u3042\u308a\u307e\u3059\uff08{days}\uff09"
+            f"\u7d42\u65e5\u4e88\u5b9a: {summary.all_day_count}\u65e5\uff08{days}\uff09"
         )
-    if unique_timed:
-        days = ", ".join(unique_timed[:5])
+    if summary.semi_all_day_count:
+        days = _preview_dates(summary.semi_all_day_dates)
         note_parts.append(
-            f"\u6642\u523b\u4ed8\u304d\u4e88\u5b9a\u304c {len(unique_timed)} \u65e5\u3042\u308a\u307e\u3059\uff08{days}\uff09"
+            f"\u6e96\u7d42\u65e5\u4e88\u5b9a: {summary.semi_all_day_count}\u65e5\uff08{days}\uff09"
+        )
+    if summary.light_count:
+        days = _preview_dates(summary.light_dates)
+        note_parts.append(
+            f"\u8efd\u3044\u4e88\u5b9a\u3042\u308a: {summary.light_count}\u65e5\uff08{days}\uff09"
         )
     return "\u3002".join(note_parts) + "\u3002", None
 
@@ -215,6 +277,7 @@ def register_estimate_command(bot: commands.Bot, openai_client: Any | None = Non
 
             ai_note: str | None = None
             calendar_note: str | None = None
+            calendar_summary = None
             using_ai = False
             steps = simple_result.steps
             total_hours = simple_result.total_hours
@@ -225,6 +288,21 @@ def register_estimate_command(bot: commands.Bot, openai_client: Any | None = Non
             calendar_note, calendar_error = _build_calendar_note(due_date=parsed_due_date)
             if calendar_error:
                 calendar_note = None
+            elif calendar_note:
+                calendar_events, summary_error = list_events(
+                    calendar_id=None,
+                    time_min=datetime.combine(datetime.now().date(), datetime.min.time()),
+                    time_max=datetime.combine(parsed_due_date, datetime.max.time()),
+                    max_results=50,
+                )
+                if not summary_error:
+                    calendar_summary = summarize_events(calendar_events)
+                    commentary = _apply_calendar_pressure_to_commentary(
+                        base_commentary=commentary,
+                        all_day_count=calendar_summary.all_day_count,
+                        semi_all_day_count=calendar_summary.semi_all_day_count,
+                        light_count=calendar_summary.light_count,
+                    )
 
             stage = "ai_adjustment"
             ai_outcome = request_estimate_adjustment(
@@ -244,7 +322,7 @@ def register_estimate_command(bot: commands.Bot, openai_client: Any | None = Non
                 total_hours = ai_outcome.result.total_hours
                 commentary = _normalize_ai_commentary(
                     ai_outcome.result.commentary,
-                    simple_result.commentary,
+                    commentary,
                 )
                 schedule_lines = _normalize_ai_schedule_lines(
                     ai_outcome.result.schedule_plan,
@@ -255,6 +333,14 @@ def register_estimate_command(bot: commands.Bot, openai_client: Any | None = Non
                 ai_note = (
                     "AI\u88dc\u6b63\u306f\u4f7f\u3048\u307e\u305b\u3093\u3067\u3057\u305f: "
                     f"{_localize_ai_failure_reason(ai_outcome.failure_reason)}"
+                )
+
+            if calendar_summary:
+                commentary = _apply_calendar_pressure_to_commentary(
+                    base_commentary=commentary,
+                    all_day_count=calendar_summary.all_day_count,
+                    semi_all_day_count=calendar_summary.semi_all_day_count,
+                    light_count=calendar_summary.light_count,
                 )
 
             stage = "display"
