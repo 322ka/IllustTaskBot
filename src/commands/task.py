@@ -157,6 +157,7 @@ def register_task_command(
                     property_name=notion_prop_work_title,
                     option_name=プロジェクト名,
                 )
+                select_options.setdefault(notion_prop_work_title, set()).add(プロジェクト名)
                 if work_title_sync_result == "added":
                     sync_messages.append("SCHEDULE同期: 作品タイトル候補を追加しました。")
             except Exception as schedule_work_title_error:
@@ -171,6 +172,7 @@ def register_task_command(
                     property_name=notion_prop_event,
                     option_name=resolved_event_name,
                 )
+                select_options.setdefault(notion_prop_event, set()).add(resolved_event_name)
                 if event_sync_result == "added":
                     sync_messages.append("SCHEDULE同期: イベント候補を追加しました。")
             except Exception as schedule_event_error:
@@ -180,6 +182,24 @@ def register_task_command(
 
             if resolved_fanfic_database_id:
                 try:
+                    fanfic_event_sync_result = ensure_select_option(
+                        notion=notion,
+                        database_id=resolved_fanfic_database_id,
+                        property_name="イベント",
+                        option_name=resolved_event_name,
+                    )
+                    if fanfic_event_sync_result == "added":
+                        sync_messages.append("FANFIC同期: イベント候補を追加しました。")
+
+                    fanfic_category_sync_result = ensure_select_option(
+                        notion=notion,
+                        database_id=resolved_fanfic_database_id,
+                        property_name="分類タグ",
+                        option_name=種類,
+                    )
+                    if fanfic_category_sync_result == "added":
+                        sync_messages.append("FANFIC同期: 分類タグ候補を追加しました。")
+
                     fanfic_result, fanfic_title_property_name, fanfic_warnings = ensure_fanfic_page(
                         notion=notion,
                         database_id=resolved_fanfic_database_id,
@@ -207,7 +227,7 @@ def register_task_command(
 
                     properties = {
                         title_property_name: {
-                            "title": [{"text": {"content": task["task_name"]}}]
+                            "title": [{"text": {"content": f"{resolved_event_name}：{task['task_name']}"}}]
                         },
                         notion_prop_schedule_date: {
                             "date": {"start": task["deadline"]}
