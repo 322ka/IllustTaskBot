@@ -17,6 +17,7 @@ from src.services.db_service import (
 )
 from src.services.progress_service import save_estimate_snapshot
 from src.services.google_calendar_service import list_events, summarize_events
+from src.services.log_service import send_log
 from src.services.estimate_runtime_ai_service import request_estimate_adjustment
 from src.services.estimate_runtime_service import (
     ESTIMATE_EVENT_REQUIRED_MESSAGE,
@@ -257,12 +258,14 @@ class EstimateTaskActionView(discord.ui.View):
     def __init__(
         self,
         *,
+        bot: commands.Bot,
         owner_user_id: str,
         estimate_created_at: str,
         openai_client: Any | None,
         task_runtime_options: dict[str, Any] | None,
     ) -> None:
         super().__init__(timeout=60 * 60 * 3)
+        self.bot = bot
         self.owner_user_id = owner_user_id
         self.estimate_created_at = estimate_created_at
         self.openai_client = openai_client
@@ -444,6 +447,13 @@ class EstimateTaskActionView(discord.ui.View):
                 "\n".join(result_lines),
                 ephemeral=True,
             )
+            await send_log(
+                self.bot,
+                content=(
+                    f"[estimate->task] user={interaction.user} event={record.event_name} work={record.work_title}\n"
+                    + "\n".join(result_lines)
+                )[:1900],
+            )
         except Exception as exc:
             self.is_processing = False
             print(f"estimate->task post process failed: {type(exc).__name__}: {exc}")
@@ -605,12 +615,18 @@ def register_estimate_command(
                 calendar_note=calendar_note,
             )
             view = EstimateTaskActionView(
+                bot=bot,
                 owner_user_id=str(interaction.user.id),
                 estimate_created_at=estimate_created_at,
                 openai_client=openai_client,
                 task_runtime_options=task_runtime_options,
             )
             await interaction.followup.send(embed=embed, view=view)
+            await send_log(
+                bot,
+                content=f"[estimate] user={interaction.user} event={resolved_event_name} work={work_title}",
+                embed=embed,
+            )
         except ValueError:
             if stage == "date_parse":
                 await interaction.followup.send("日付形式が正しくありません。形式: YYYY-MM-DD（例: 2026-05-20）")

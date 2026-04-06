@@ -9,6 +9,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.services.db_service import get_current_event
+from src.services.log_service import send_log
 from src.services.task_runtime_service import execute_task_registration, generate_task_plan
 
 
@@ -158,3 +159,11 @@ def register_task_command(
                 inline=False,
             )
         await interaction.followup.send(embed=embed)
+        await send_log(
+            bot,
+            content=(
+                f"[task] user={interaction.user} event={resolved_event_name} work={作品名} "
+                f"created={result.created_count} skipped={result.skipped_duplicate_count}"
+            ),
+            embed=embed,
+        )

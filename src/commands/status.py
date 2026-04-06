@@ -7,6 +7,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.services.db_service import get_current_event
+from src.services.log_service import send_log
 from src.services.progress_service import build_work_progress_summaries
 
 
@@ -48,9 +49,18 @@ def register_status_command(bot: commands.Bot) -> None:
         header = (
             f"イベント: {resolved_event_name}" if resolved_event_name else "イベント横断で集計"
         )
+        response_text = (
+            "現在の進捗状況です。\n"
+            f"{header}\n"
+            + "\n".join(lines)
+        )
         await interaction.followup.send(
             "現在の進捗状況です。\n"
             f"{header}\n"
             + "\n".join(lines),
             ephemeral=True,
+        )
+        await send_log(
+            bot,
+            content=f"[status] user={interaction.user}\n{response_text}"[:1900],
         )

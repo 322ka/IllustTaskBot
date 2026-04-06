@@ -30,10 +30,12 @@ NOTION_DB_ID = os.getenv("NOTION_DATABASE_ID")
 EVENT_DB_ID = os.getenv("NOTION_EVENT_DATABASE_ID")
 FANFIC_DB_ID = os.getenv("NOTION_FANFIC_DATABASE_ID")
 REPORT_CHANNEL_ID = int(os.getenv("REPORT_CHANNEL_ID", "0"))
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+bot.log_channel_id = LOG_CHANNEL_ID
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 notion = Client(auth=NOTION_TOKEN)
 

@@ -8,6 +8,7 @@ from discord.ext import commands
 
 from src.services.db_service import get_current_event
 from src.services.google_calendar_service import list_events, summarize_events
+from src.services.log_service import send_log
 from src.services.progress_service import build_reschedule_suggestions, build_work_progress_summaries
 
 
@@ -99,4 +100,9 @@ def register_reschedule_command(bot: commands.Bot) -> None:
         if calendar_context:
             lines.append(calendar_context)
 
-        await interaction.followup.send("\n".join(lines), ephemeral=True)
+        response_text = "\n".join(lines)
+        await interaction.followup.send(response_text, ephemeral=True)
+        await send_log(
+            bot,
+            content=f"[reschedule] user={interaction.user}\n{response_text}"[:1900],
+        )

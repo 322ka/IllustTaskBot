@@ -7,6 +7,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.services.db_service import get_current_event
+from src.services.log_service import send_log
 from src.services.progress_service import (
     PROGRESS_STATUS_DONE,
     PROGRESS_STATUS_IN_PROGRESS,
@@ -107,4 +108,9 @@ def register_progress_command(bot: commands.Bot) -> None:
         lines.append(f"コメント: {comment}")
         lines.append(f"更新時刻: {updated_at}")
 
-        await interaction.followup.send("\n".join(lines), ephemeral=True)
+        response_text = "\n".join(lines)
+        await interaction.followup.send(response_text, ephemeral=True)
+        await send_log(
+            bot,
+            content=f"[progress] user={interaction.user}\n{response_text}"[:1900],
+        )
