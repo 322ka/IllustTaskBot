@@ -124,13 +124,13 @@ async def add_task(
                             "title": [{"text": {"content": f"{task['task_name']}"}}]
                         },
                         "カテゴリ": {
-                            "select": {"name": category}
+                            "select": {"name": 種類}
                         },
                         "予定": {
                             "date": {"start": task["deadline"]}
                         },
                         "イベント名(進捗...)": {
-                            "select": {"name": task_type}
+                            "select": {"name": 種類}
                         },
                         "済": {
                             "checkbox": False
