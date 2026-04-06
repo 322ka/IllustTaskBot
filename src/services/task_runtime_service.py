@@ -3,15 +3,19 @@
 import json
 import traceback
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable
 
+from src.services.estimate_runtime_service import get_work_type_weight
+from src.services.google_calendar_service import DAY_CAPACITY_HOURS, build_daily_blocked_hours, list_events, summarize_events
 from src.services.notion_service import (
     ensure_event_page_with_details,
     ensure_fanfic_page,
     ensure_select_option,
+    list_schedule_entries_on_date,
     schedule_task_exists,
 )
+from src.services.progress_service import list_estimate_snapshots, list_progress_records
 
 WORKFLOW_STEPS = [
     "情報収集",
@@ -27,6 +31,26 @@ WORKFLOW_STEPS = [
     "仕上げ",
 ]
 
+WORKFLOW_STEP_BASE_HOURS = {
+    "情報収集": 1.0,
+    "イメージ策定": 1.5,
+    "大ラフ": 2.0,
+    "詳細ラフ": 2.0,
+    "カラーラフ": 2.0,
+    "下書き": 2.0,
+    "線画": 3.0,
+    "色分け": 2.0,
+    "着彩": 3.0,
+    "修正": 1.5,
+    "仕上げ": 2.0,
+}
+
+DEFAULT_TASK_HOURS = 3.0
+NORMAL_DAY_CAPACITY_HOURS = 8.0
+LIGHT_DAY_CAPACITY_HOURS = 5.0
+SEMI_ALL_DAY_CAPACITY_HOURS = 2.0
+ALL_DAY_CAPACITY_HOURS = 0.0
+
 
 @dataclass
 class TaskExecutionResult:
@@ -39,6 +63,7 @@ class TaskExecutionResult:
     fanfic_page_url: str | None = None
     fanfic_used_existing: bool = False
     created_schedule_page_urls: list[str] | None = None
+    auto_shifted_count: int = 0
 
 
 TASK_JSON_EXAMPLE = """[
@@ -131,6 +156,7 @@ def execute_task_registration(
     work_category: str,
     work_type: str,
     event_name: str,
+    user_id: str | None = None,
     get_database_schema_config: Callable[[str], tuple[str, dict[str, set[str]]]],
     build_select_property: Callable[[str, str | None, dict[str, set[str]], list[str]], dict | None],
     notion_prop_schedule_date: str,
@@ -237,11 +263,104 @@ def execute_task_registration(
 
     created_count = 0
     skipped_duplicate_count = 0
+    auto_shifted_count = 0
+    updated_tasks_list: list[dict[str, str]] = []
+    schedule_load_cache: dict[str, float] = {}
+    snapshot_hours_map: dict[tuple[str, str, str], float] = {}
+    progress_hours_map: dict[tuple[str, str, str], float] = {}
+
+    if user_id:
+        try:
+            for snapshot in list_estimate_snapshots(user_id=user_id, event_name=event_name):
+                snapshot_hours_map[(snapshot.event_name, snapshot.work_title, snapshot.step_name)] = snapshot.estimated_hours
+            for record in list_progress_records(user_id=user_id, event_name=event_name):
+                progress_hours_map[(record.event_name, record.work_title, record.step_name)] = record.actual_hours
+        except Exception as exc:
+            warning_messages.append(f"実績参照に失敗しました: {exc}")
+
+    parsed_deadlines = [
+        datetime.strptime(task["deadline"], "%Y-%m-%d").date()
+        for task in tasks_list
+        if task.get("deadline")
+    ]
+    calendar_summary = None
+    calendar_error = None
+    calendar_events: list[Any] = []
+    if parsed_deadlines:
+        calendar_events, calendar_error = list_events(
+            calendar_id=None,
+            time_min=datetime.combine(min(parsed_deadlines) - timedelta(days=30), datetime.min.time()),
+            time_max=datetime.combine(max(parsed_deadlines), datetime.max.time()),
+            max_results=200,
+        )
+        if calendar_error:
+            warning_messages.append(f"Googleカレンダー参照に失敗しました: {calendar_error}")
+        else:
+            calendar_summary = summarize_events(calendar_events)
+    blocked_hours_map = build_daily_blocked_hours(calendar_events) if calendar_events else {}
+
+    def get_day_capacity_hours(date_value: str) -> float:
+        blocked_hours = blocked_hours_map.get(date_value, 0.0)
+        return max(DAY_CAPACITY_HOURS - blocked_hours, 0.0)
+
+    def estimate_task_hours(step_name: str, *, weighted: bool) -> float:
+        base_hours = WORKFLOW_STEP_BASE_HOURS.get(step_name, DEFAULT_TASK_HOURS)
+        if weighted:
+            return round(base_hours * get_work_type_weight(work_type), 2)
+        return base_hours
+
+    def estimate_existing_schedule_entry_hours(*, entry_title: str, entry_work_title: str) -> float:
+        step_name = entry_title.split("：")[-1].strip()
+        progress_key = (event_name, entry_work_title, step_name)
+        if progress_key in progress_hours_map:
+            return progress_hours_map[progress_key]
+        snapshot_key = (event_name, entry_work_title, step_name)
+        if snapshot_key in snapshot_hours_map:
+            return snapshot_hours_map[snapshot_key]
+        return estimate_task_hours(step_name, weighted=False)
+
+    def get_existing_schedule_load(date_value: str) -> float:
+        if date_value in schedule_load_cache:
+            return schedule_load_cache[date_value]
+
+        entries = list_schedule_entries_on_date(
+            notion=notion,
+            database_id=notion_db_id,
+            title_property_name=title_property_name,
+            work_title_property_name=notion_prop_work_title,
+            date_property_name=notion_prop_schedule_date,
+            date_value=date_value,
+        )
+        load_hours = 0.0
+        for entry in entries:
+            load_hours += estimate_existing_schedule_entry_hours(
+                entry_title=entry["title"],
+                entry_work_title=entry["work_title"],
+            )
+
+        schedule_load_cache[date_value] = round(load_hours, 2)
+        return schedule_load_cache[date_value]
+
+    def resolve_schedule_deadline(original_deadline: str, task_name: str) -> str:
+        nonlocal auto_shifted_count
+        candidate_date = datetime.strptime(original_deadline, "%Y-%m-%d").date()
+        task_hours = estimate_task_hours(task_name, weighted=True)
+
+        for _ in range(30):
+            candidate_key = candidate_date.isoformat()
+            existing_load = get_existing_schedule_load(candidate_key)
+            if existing_load + task_hours <= get_day_capacity_hours(candidate_key):
+                schedule_load_cache[candidate_key] = round(existing_load + task_hours, 2)
+                if candidate_key != original_deadline:
+                    auto_shifted_count += 1
+                return candidate_key
+            candidate_date -= timedelta(days=1)
+
+        return original_deadline
 
     for task in tasks_list:
         try:
             task_name = task["task_name"]
-            deadline = task["deadline"]
             schedule_title = f"{event_name}：{task_name}"
 
             if schedule_task_exists(
@@ -255,7 +374,12 @@ def execute_task_registration(
                 event_value=event_name,
             ):
                 skipped_duplicate_count += 1
+                updated_tasks_list.append(dict(task))
                 continue
+
+            deadline = resolve_schedule_deadline(task["deadline"], task_name)
+            updated_task = dict(task)
+            updated_task["deadline"] = deadline
 
             properties = {
                 title_property_name: {"title": [{"text": {"content": schedule_title}}]},
@@ -297,11 +421,17 @@ def execute_task_registration(
             if created_page.get("url"):
                 created_schedule_page_urls.append(created_page["url"])
             created_count += 1
+            updated_tasks_list.append(updated_task)
         except KeyError as exc:
             warning_messages.append(f"タスクデータ不足のためスキップしました: {exc}")
         except Exception as exc:
             warning_messages.append(f"{task.get('task_name', 'Unknown')} の登録に失敗しました: {exc}")
             traceback.print_exc()
+
+    if auto_shifted_count:
+        sync_messages.append(
+            f"SCHEDULE同期: 作業時間と予定圧を考慮して {auto_shifted_count} 件の締切を前倒し調整しました。"
+        )
 
     return TaskExecutionResult(
         total_count=len(tasks_list),
@@ -309,8 +439,9 @@ def execute_task_registration(
         skipped_duplicate_count=skipped_duplicate_count,
         sync_messages=sync_messages,
         warning_messages=sorted(set(warning_messages)),
-        tasks_list=tasks_list,
+        tasks_list=updated_tasks_list or tasks_list,
         fanfic_page_url=fanfic_page_url,
         fanfic_used_existing=fanfic_used_existing,
         created_schedule_page_urls=created_schedule_page_urls,
+        auto_shifted_count=auto_shifted_count,
     )

@@ -118,6 +118,7 @@ def register_task_command(
                 work_category=作業種別.value,
                 work_type=作品種別.value,
                 event_name=resolved_event_name,
+                user_id=str(interaction.user.id),
                 get_database_schema_config=get_database_schema_config,
                 build_select_property=build_select_property,
                 notion_prop_schedule_date=notion_prop_schedule_date,

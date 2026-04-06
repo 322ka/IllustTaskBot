@@ -43,6 +43,12 @@ class GoogleCalendarEventSummary:
         return len(self.light_dates)
 
 
+JST = timezone(timedelta(hours=9))
+DAY_START_HOUR = 9
+DAY_END_HOUR = 24
+DAY_CAPACITY_HOURS = DAY_END_HOUR - DAY_START_HOUR
+
+
 def _import_google_dependencies() -> tuple[Any, Any, Any] | tuple[None, None, None]:
     try:
         from google.auth.transport.requests import Request
@@ -226,6 +232,55 @@ def summarize_events(events: list[GoogleCalendarEvent]) -> GoogleCalendarEventSu
         semi_all_day_dates=normalized_semi_all_day,
         light_dates=normalized_light,
     )
+
+
+def build_daily_blocked_hours(
+    events: list[GoogleCalendarEvent],
+    *,
+    day_start_hour: int = DAY_START_HOUR,
+    day_end_hour: int = DAY_END_HOUR,
+) -> dict[str, float]:
+    blocked_hours: dict[str, float] = {}
+
+    for event in events:
+        event_dates = _enumerate_event_dates(event)
+        if not event_dates:
+            continue
+
+        if event.is_all_day:
+            for event_date in event_dates:
+                blocked_hours[event_date] = float(day_end_hour - day_start_hour)
+            continue
+
+        start_dt = _parse_datetime(event.start)
+        end_dt = _parse_datetime(event.end)
+        if not start_dt or not end_dt or end_dt <= start_dt:
+            continue
+
+        local_start = start_dt.astimezone(JST)
+        local_end = end_dt.astimezone(JST)
+        current_date = local_start.date()
+        final_date = (local_end - timedelta(microseconds=1)).date()
+
+        while current_date <= final_date:
+            window_start = datetime.combine(current_date, time(hour=day_start_hour, tzinfo=JST))
+            if day_end_hour >= 24:
+                window_end = datetime.combine(current_date + timedelta(days=1), time.min, tzinfo=JST)
+            else:
+                window_end = datetime.combine(current_date, time(hour=day_end_hour, tzinfo=JST))
+
+            overlap_start = max(local_start, window_start)
+            overlap_end = min(local_end, window_end)
+            if overlap_end > overlap_start:
+                overlap_hours = (overlap_end - overlap_start).total_seconds() / 3600
+                date_key = current_date.isoformat()
+                blocked_hours[date_key] = min(
+                    float(day_end_hour - day_start_hour),
+                    round(blocked_hours.get(date_key, 0.0) + overlap_hours, 2),
+                )
+            current_date += timedelta(days=1)
+
+    return blocked_hours
 
 
 def list_events(

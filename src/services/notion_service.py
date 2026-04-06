@@ -303,3 +303,92 @@ def schedule_task_exists(
         page_size=1,
     )
     return bool(response.get("results"))
+
+
+def count_schedule_tasks_on_date(
+    notion: Any,
+    database_id: str,
+    date_property_name: str,
+    date_value: str,
+) -> int:
+    response = notion.databases.query(
+        database_id=database_id,
+        filter={
+            "property": date_property_name,
+            "date": {
+                "equals": date_value,
+            },
+        },
+        page_size=100,
+    )
+    return len(response.get("results", []))
+
+
+def list_schedule_titles_on_date(
+    notion: Any,
+    database_id: str,
+    title_property_name: str,
+    date_property_name: str,
+    date_value: str,
+) -> list[str]:
+    response = notion.databases.query(
+        database_id=database_id,
+        filter={
+            "property": date_property_name,
+            "date": {
+                "equals": date_value,
+            },
+        },
+        page_size=100,
+    )
+
+    titles: list[str] = []
+    for result in response.get("results", []):
+        title_items = (
+            result.get("properties", {})
+            .get(title_property_name, {})
+            .get("title", [])
+        )
+        title_text = "".join(item.get("plain_text", "") for item in title_items).strip()
+        if title_text:
+            titles.append(title_text)
+    return titles
+
+
+def list_schedule_entries_on_date(
+    notion: Any,
+    database_id: str,
+    title_property_name: str,
+    work_title_property_name: str,
+    date_property_name: str,
+    date_value: str,
+) -> list[dict[str, str]]:
+    response = notion.databases.query(
+        database_id=database_id,
+        filter={
+            "property": date_property_name,
+            "date": {
+                "equals": date_value,
+            },
+        },
+        page_size=100,
+    )
+
+    entries: list[dict[str, str]] = []
+    for result in response.get("results", []):
+        properties = result.get("properties", {})
+        title_items = properties.get(title_property_name, {}).get("title", [])
+        title_text = "".join(item.get("plain_text", "") for item in title_items).strip()
+        work_title_value = (
+            properties.get(work_title_property_name, {})
+            .get("select", {})
+            .get("name", "")
+        )
+        if title_text:
+            entries.append(
+                {
+                    "title": title_text,
+                    "work_title": work_title_value,
+                }
+            )
+    return entries

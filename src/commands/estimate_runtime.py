@@ -373,6 +373,7 @@ class EstimateTaskActionView(discord.ui.View):
                 work_category=record.work_category,
                 work_type=record.work_type,
                 event_name=record.event_name,
+                user_id=self.owner_user_id,
                 get_database_schema_config=self.task_runtime_options["get_database_schema_config"],
                 build_select_property=self.task_runtime_options["build_select_property"],
                 notion_prop_schedule_date=self.task_runtime_options["notion_prop_schedule_date"],
