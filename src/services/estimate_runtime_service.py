@@ -7,6 +7,7 @@ from src.models.estimate_runtime_definitions import (
     DEFAULT_ESTIMATE_TEMPLATE,
     ESTIMATE_TEMPLATES,
     EstimateStep,
+    WORK_TYPE_WEIGHTS,
 )
 from src.services.db_service import get_current_event
 
@@ -22,6 +23,7 @@ ESTIMATE_EVENT_REQUIRED_MESSAGE = (
 class SimpleEstimateResult:
     steps: list[EstimateStep]
     total_hours: float
+    work_type_weight: float
     days_until_due: int
     commentary: str
     schedule_lines: list[str]
@@ -36,6 +38,19 @@ def resolve_estimate_event_name(explicit_event_name: str | None, user_id: str) -
 def get_estimate_template(work_type: str) -> list[EstimateStep]:
     template = ESTIMATE_TEMPLATES.get(work_type, DEFAULT_ESTIMATE_TEMPLATE)
     return [dict(step) for step in template]
+
+
+def get_work_type_weight(work_type: str) -> float:
+    return WORK_TYPE_WEIGHTS.get(work_type, 1.0)
+
+
+def apply_work_type_weight(steps: list[EstimateStep], work_type: str) -> tuple[list[EstimateStep], float]:
+    weight = get_work_type_weight(work_type)
+    weighted_steps = [
+        {"step_name": step["step_name"], "hours": round(step["hours"] * weight, 2)}
+        for step in steps
+    ]
+    return weighted_steps, weight
 
 
 def build_simple_commentary(total_hours: float, days_until_due: int) -> str:
@@ -66,12 +81,14 @@ def build_simple_estimate(
     today: date | None = None,
 ) -> SimpleEstimateResult:
     base_date = today or datetime.now().date()
-    steps = get_estimate_template(work_type)
+    base_steps = get_estimate_template(work_type)
+    steps, work_type_weight = apply_work_type_weight(base_steps, work_type)
     total_hours = sum(step["hours"] for step in steps)
     days_until_due = (due_date - base_date).days
     return SimpleEstimateResult(
         steps=steps,
         total_hours=total_hours,
+        work_type_weight=work_type_weight,
         days_until_due=days_until_due,
         commentary=build_simple_commentary(total_hours, days_until_due),
         schedule_lines=build_simple_schedule_lines(due_date, steps),

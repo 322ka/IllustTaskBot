@@ -106,7 +106,22 @@ register_event_command(
     fanfic_database_id=FANFIC_DB_ID,
 )
 register_calendar_preview_command(bot=bot)
-register_estimate_command(bot=bot, openai_client=openai_client)
+register_estimate_command(
+    bot=bot,
+    openai_client=openai_client,
+    task_runtime_options={
+        "notion": notion,
+        "notion_db_id": NOTION_DB_ID,
+        "fanfic_database_id": FANFIC_DB_ID,
+        "get_database_schema_config": get_database_schema_config,
+        "build_select_property": build_select_property,
+        "notion_prop_schedule_date": NOTION_PROP_SCHEDULE_DATE,
+        "notion_prop_category": NOTION_PROP_CATEGORY,
+        "notion_prop_event": NOTION_PROP_EVENT,
+        "notion_prop_work_title": NOTION_PROP_WORK_TITLE,
+        "notion_prop_done": NOTION_PROP_DONE,
+    },
+)
 register_task_command(
     bot=bot,
     openai_client=openai_client,

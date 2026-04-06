@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import discord
@@ -8,6 +8,12 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.commands.task import WORK_CATEGORY_CHOICES, WORK_TYPE_CHOICES
+from src.services.db_service import (
+    ESTIMATE_EXPIRY_SECONDS,
+    get_latest_estimate,
+    mark_latest_estimate_task_created,
+    save_latest_estimate,
+)
 from src.services.google_calendar_service import list_events, summarize_events
 from src.services.estimate_runtime_ai_service import request_estimate_adjustment
 from src.services.estimate_runtime_service import (
@@ -15,6 +21,7 @@ from src.services.estimate_runtime_service import (
     build_simple_estimate,
     resolve_estimate_event_name,
 )
+from src.services.task_runtime_service import execute_task_registration, generate_task_plan
 
 
 DIFFICULTY_CHOICES = [
@@ -61,6 +68,14 @@ def _localize_ai_failure_reason(reason: str) -> str:
         "schedule_plan is empty.": "schedule_plan が空でした。",
     }
     return mapping.get(reason, reason)
+
+
+def _normalize_ai_note(text: str | None, *, using_ai: bool) -> str | None:
+    if not text:
+        return None
+    if using_ai:
+        return _normalize_ai_buffer_comment(text)
+    return text
 
 
 def _preview_dates(dates: list[str]) -> str:
@@ -146,10 +161,7 @@ def _build_ai_calendar_context(calendar_summary: Any | None) -> dict[str, Any]:
     }
 
 
-def _build_calendar_note(
-    *,
-    due_date: datetime.date,
-) -> tuple[str | None, str | None, Any | None]:
+def _build_calendar_note(*, due_date: datetime.date) -> tuple[str | None, str | None, Any | None]:
     today = datetime.now().date()
     if due_date < today:
         return None, None, None
@@ -185,12 +197,17 @@ def _build_calendar_note(
     return "。".join(note_parts) + "。", None, summary
 
 
+def _format_notion_link(url: str) -> str:
+    return f"<{url}>"
+
+
 def build_estimate_embed(
     *,
     event_name: str,
     work_title: str,
     work_category: str,
     work_type: str,
+    work_type_weight: float,
     difficulty: str | None,
     total_hours: float,
     days_until_due: int,
@@ -211,8 +228,9 @@ def build_estimate_embed(
     embed.add_field(name="作業種別", value=work_category, inline=True)
     embed.add_field(name="作品種別", value=work_type, inline=True)
     embed.add_field(name="難易度", value=difficulty or "未指定", inline=True)
+    embed.add_field(name="作品種別補正", value=f"×{work_type_weight:.2f}（{work_type}）", inline=True)
     embed.add_field(name="工程一覧", value=step_lines[:1024], inline=False)
-    embed.add_field(name="合計時間", value=f"{total_hours:.1f}時間", inline=True)
+    embed.add_field(name="合計時間", value=f"{total_hours:.1f}時間（補正後）", inline=True)
     embed.add_field(name="締切まで", value=f"{days_until_due}日", inline=True)
     embed.add_field(name="所感", value=commentary[:1024], inline=False)
     embed.add_field(
@@ -225,17 +243,153 @@ def build_estimate_embed(
     if using_ai and ai_note:
         embed.add_field(name="AI補足", value=ai_note[:1024], inline=False)
     if not using_ai:
-        fallback_text = (
-            "AI補正が使えなかったため、"
-            "簡易見積を表示しています。"
-        )
+        fallback_text = "AI補正が使えなかったため、簡易見積を表示しています。"
         if ai_note:
             fallback_text = f"{fallback_text}\n{ai_note}"
         embed.add_field(name="表示モード", value=fallback_text[:1024], inline=False)
+    embed.set_footer(text="この見積結果をもとに task 化できます。")
     return embed
 
 
-def register_estimate_command(bot: commands.Bot, openai_client: Any | None = None) -> None:
+class EstimateTaskActionView(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        owner_user_id: str,
+        estimate_created_at: str,
+        openai_client: Any | None,
+        task_runtime_options: dict[str, Any] | None,
+    ) -> None:
+        super().__init__(timeout=60 * 60 * 3)
+        self.owner_user_id = owner_user_id
+        self.estimate_created_at = estimate_created_at
+        self.openai_client = openai_client
+        self.task_runtime_options = task_runtime_options or {}
+        self.is_processed = False
+
+    @discord.ui.button(label="この内容でタスク作成", style=discord.ButtonStyle.green)
+    async def create_task_from_estimate(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if str(interaction.user.id) != self.owner_user_id:
+            await interaction.response.send_message("このボタンは見積を作成した本人のみ使えます。", ephemeral=True)
+            return
+
+        record = get_latest_estimate(self.owner_user_id)
+        if record is None:
+            await interaction.response.send_message("task 化できる見積が見つかりませんでした。もう一度 /estimate を実行してください。", ephemeral=True)
+            return
+
+        if record.estimate_created_at != self.estimate_created_at:
+            await interaction.response.send_message("より新しい見積があります。最新の見積結果から task 化してください。", ephemeral=True)
+            return
+
+        created_at = datetime.fromisoformat(record.estimate_created_at)
+        if (datetime.now(timezone.utc) - created_at).total_seconds() > ESTIMATE_EXPIRY_SECONDS:
+            await interaction.response.send_message("この見積結果は古くなったため失効しました。もう一度 /estimate を実行してください。", ephemeral=True)
+            return
+
+        if record.task_created_at or self.is_processed:
+            await interaction.response.send_message("この見積からの task 化はすでに処理済みです。", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        notion_db_id = self.task_runtime_options.get("notion_db_id")
+        notion = self.task_runtime_options.get("notion")
+        if not notion_db_id or notion is None:
+            await interaction.followup.send("task 化に必要な Notion 設定が不足しています。", ephemeral=True)
+            return
+
+        try:
+            tasks_list = generate_task_plan(
+                openai_client=self.openai_client,
+                work_title=record.work_title,
+                due_date=record.due_date,
+                work_category=record.work_category,
+                work_type=record.work_type,
+            )
+            result = execute_task_registration(
+                notion=notion,
+                notion_db_id=notion_db_id,
+                fanfic_database_id=self.task_runtime_options.get("fanfic_database_id"),
+                tasks_list=tasks_list,
+                work_title=record.work_title,
+                work_category=record.work_category,
+                work_type=record.work_type,
+                event_name=record.event_name,
+                get_database_schema_config=self.task_runtime_options["get_database_schema_config"],
+                build_select_property=self.task_runtime_options["build_select_property"],
+                notion_prop_schedule_date=self.task_runtime_options["notion_prop_schedule_date"],
+                notion_prop_category=self.task_runtime_options["notion_prop_category"],
+                notion_prop_event=self.task_runtime_options["notion_prop_event"],
+                notion_prop_work_title=self.task_runtime_options["notion_prop_work_title"],
+                notion_prop_done=self.task_runtime_options["notion_prop_done"],
+            )
+        except Exception as exc:
+            await interaction.followup.send(f"task 化に失敗しました: {exc}", ephemeral=True)
+            return
+
+        self.is_processed = True
+        button.disabled = True
+        mark_latest_estimate_task_created(self.owner_user_id)
+        if interaction.message:
+            await interaction.message.edit(view=self)
+
+        fanfic_status_message = "FANFIC: 未処理です。"
+        if self.task_runtime_options.get("fanfic_database_id"):
+            fanfic_status_message = (
+                "FANFIC: 既存ページを利用しました。"
+                if result.fanfic_used_existing
+                else "FANFIC: 新規ページを作成しました。"
+            )
+            if result.fanfic_page_url is None:
+                fanfic_status_message = "FANFIC: 同期結果を確認してください。"
+        else:
+            fanfic_status_message = "FANFIC: DB未設定のためスキップしました。"
+
+        result_lines = [
+            "見積結果から task 化を完了しました。",
+            f"作品名: {record.work_title}",
+            f"イベント名: {record.event_name}",
+            f"SCHEDULE作成件数: {result.created_count}件",
+            f"SCHEDULE重複スキップ: {result.skipped_duplicate_count}件",
+            fanfic_status_message,
+        ]
+
+        if result.fanfic_page_url:
+            result_lines.append(f"FANFICページ: {_format_notion_link(result.fanfic_page_url)}")
+
+        if result.created_schedule_page_urls:
+            preview_count = min(3, len(result.created_schedule_page_urls))
+            result_lines.append(f"SCHEDULEページ: {len(result.created_schedule_page_urls)}件（先頭 {preview_count} 件）")
+            result_lines.extend(
+                f"- {_format_notion_link(url)}"
+                for url in result.created_schedule_page_urls[:preview_count]
+            )
+            remaining_count = len(result.created_schedule_page_urls) - 3
+            if remaining_count > 0:
+                result_lines.append(f"- ほか {remaining_count} 件")
+
+        if result.sync_messages:
+            result_lines.append("同期結果:")
+            result_lines.extend(f"- {message}" for message in result.sync_messages[:5])
+        if result.warning_messages:
+            result_lines.append("注意:")
+            result_lines.extend(f"- {message}" for message in result.warning_messages[:5])
+        else:
+            result_lines.append("エラー: なし")
+
+        await interaction.followup.send(
+            "\n".join(result_lines),
+            ephemeral=True,
+        )
+
+
+
+def register_estimate_command(
+    bot: commands.Bot,
+    openai_client: Any | None = None,
+    task_runtime_options: dict[str, Any] | None = None,
+) -> None:
     @bot.tree.command(name="estimate", description="作品の見積と簡易スケジュール案を確認")
     @app_commands.rename(
         work_title="作品名",
@@ -321,6 +475,7 @@ def register_estimate_command(bot: commands.Bot, openai_client: Any | None = Non
                 difficulty=difficulty.value if difficulty else None,
                 due_date=parsed_due_date.isoformat(),
                 template_steps=simple_result.steps,
+                simple_total_hours=simple_result.total_hours,
                 calendar_context=_build_ai_calendar_context(calendar_summary),
             )
 
@@ -328,20 +483,11 @@ def register_estimate_command(bot: commands.Bot, openai_client: Any | None = Non
                 using_ai = True
                 steps = ai_outcome.result.adjusted_steps
                 total_hours = ai_outcome.result.total_hours
-                commentary = _normalize_ai_commentary(
-                    ai_outcome.result.commentary,
-                    commentary,
-                )
-                schedule_lines = _normalize_ai_schedule_lines(
-                    ai_outcome.result.schedule_plan,
-                    simple_result.schedule_lines,
-                )
-                ai_note = _normalize_ai_buffer_comment(ai_outcome.result.buffer_comment)
+                commentary = _normalize_ai_commentary(ai_outcome.result.commentary, commentary)
+                schedule_lines = _normalize_ai_schedule_lines(ai_outcome.result.schedule_plan, simple_result.schedule_lines)
+                ai_note = _normalize_ai_note(ai_outcome.result.buffer_comment, using_ai=True)
             elif ai_outcome.failure_reason:
-                ai_note = (
-                    "AI補正は使えませんでした: "
-                    f"{_localize_ai_failure_reason(ai_outcome.failure_reason)}"
-                )
+                ai_note = f"AI補正は使えませんでした: {_localize_ai_failure_reason(ai_outcome.failure_reason)}"
 
             if calendar_summary:
                 commentary = _apply_calendar_pressure_to_commentary(
@@ -351,16 +497,23 @@ def register_estimate_command(bot: commands.Bot, openai_client: Any | None = Non
                     light_count=calendar_summary.light_count,
                 )
 
-            stage = "display"
-            step_lines = "\n".join(
-                f"- {step['step_name']}: {step['hours']:.1f}h"
-                for step in steps
+            estimate_created_at = save_latest_estimate(
+                user_id=str(interaction.user.id),
+                event_name=resolved_event_name,
+                work_title=work_title,
+                due_date=due_date,
+                work_category=work_category.value,
+                work_type=work_type.value,
             )
+
+            stage = "display"
+            step_lines = "\n".join(f"- {step['step_name']}: {step['hours']:.1f}h" for step in steps)
             embed = build_estimate_embed(
                 event_name=resolved_event_name,
                 work_title=work_title,
                 work_category=work_category.value,
                 work_type=work_type.value,
+                work_type_weight=simple_result.work_type_weight,
                 difficulty=difficulty.value if difficulty else None,
                 total_hours=total_hours,
                 days_until_due=simple_result.days_until_due,
@@ -371,21 +524,19 @@ def register_estimate_command(bot: commands.Bot, openai_client: Any | None = Non
                 ai_note=ai_note,
                 calendar_note=calendar_note,
             )
-            await interaction.followup.send(embed=embed)
+            view = EstimateTaskActionView(
+                owner_user_id=str(interaction.user.id),
+                estimate_created_at=estimate_created_at,
+                openai_client=openai_client,
+                task_runtime_options=task_runtime_options,
+            )
+            await interaction.followup.send(embed=embed, view=view)
         except ValueError:
             if stage == "date_parse":
-                await interaction.followup.send(
-                    "日付形式が正しくありません。"
-                    "形式: YYYY-MM-DD（例: 2026-05-20）"
-                )
+                await interaction.followup.send("日付形式が正しくありません。形式: YYYY-MM-DD（例: 2026-05-20）")
                 return
             print(f"estimate error at {stage}: ValueError")
-            await interaction.followup.send(
-                "見積処理中に入力値の解釈でエラーが発生しました。"
-                "内容を確認して再実行してください。"
-            )
+            await interaction.followup.send("見積処理中に入力値の解釈でエラーが発生しました。内容を確認して再実行してください。")
         except Exception as exc:
             print(f"estimate error at {stage}: {type(exc).__name__}: {exc}")
-            await interaction.followup.send(
-                f"見積処理中にエラーが発生しました。失敗段階: {stage}"
-            )
+            await interaction.followup.send(f"見積処理中にエラーが発生しました。失敗段階: {stage}")

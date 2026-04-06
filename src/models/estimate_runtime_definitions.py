@@ -80,3 +80,13 @@ ESTIMATE_TEMPLATES: dict[str, list[EstimateStep]] = {
     ],
     "\u305d\u306e\u4ed6": DEFAULT_ESTIMATE_TEMPLATE,
 }
+
+
+WORK_TYPE_WEIGHTS: dict[str, float] = {
+    "1\u679a\u7d75": 1.0,
+    "\u30b0\u30c3\u30ba": 1.1,
+    "\u540c\u4eba\u8a8c": 1.15,
+    "\u30ce\u30d9\u30eb\u30c6\u30a3": 0.95,
+    "\u30c7\u30a3\u30b9\u30d7\u30ec\u30a4": 1.2,
+    "\u305d\u306e\u4ed6": 1.0,
+}

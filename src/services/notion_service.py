@@ -213,7 +213,7 @@ def ensure_fanfic_page(
     event_name: str | None,
     category_name: str | None,
     status_name: str = "未着手",
-) -> tuple[str, str, list[str]]:
+) -> tuple[str, str, list[str], str | None]:
     title_property_name = get_title_property_name(notion, database_id)
     existing_page = find_page_by_title(
         notion=notion,
@@ -222,7 +222,7 @@ def ensure_fanfic_page(
         page_title=work_title,
     )
     if existing_page:
-        return "exists", title_property_name, []
+        return "exists", title_property_name, [], existing_page.get("url")
 
     warnings: list[str] = []
     properties: dict[str, dict] = {
@@ -259,11 +259,11 @@ def ensure_fanfic_page(
 
         properties[property_name] = property_value
 
-    notion.pages.create(
+    created_page = notion.pages.create(
         parent={"database_id": database_id},
         properties=properties,
     )
-    return "created", title_property_name, warnings
+    return "created", title_property_name, warnings, created_page.get("url")
 
 
 def schedule_task_exists(

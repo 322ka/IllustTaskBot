@@ -9,6 +9,13 @@ from discord.ext import commands
 from src.services.google_calendar_service import list_events
 
 
+def _normalize_calendar_event_title(title: str) -> str:
+    normalized = (title or "").strip()
+    if normalized in {"", "(no title)"}:
+        return "予定あり"
+    return normalized
+
+
 def _format_calendar_event_time(start: str, is_all_day: bool) -> str:
     if is_all_day:
         return f"{start} (\u7d42\u65e5)"
@@ -58,7 +65,7 @@ def register_calendar_preview_command(bot: commands.Bot) -> None:
         preview_lines = []
         for event in events[:5]:
             preview_lines.append(
-                f"- {event.summary} / {_format_calendar_event_time(event.start, event.is_all_day)}"
+                f"- {_normalize_calendar_event_title(event.summary)} / {_format_calendar_event_time(event.start, event.is_all_day)}"
             )
 
         embed = discord.Embed(

@@ -70,3 +70,12 @@ cd IllustTaskBot
 - OAuth 2.0 \u306e authorized user token \u3092\u4f7f\u3044\u307e\u3059
 - scope \u306f `https://www.googleapis.com/auth/calendar.readonly` \u306e\u307f\u3067\u3059
 - token \u304c\u7121\u3044\u5834\u5408\u3067\u3082 bot \u5168\u4f53\u306f\u843d\u3061\u305a\u3001Google \u30ab\u30ec\u30f3\u30c0\u30fc\u9023\u643a\u3060\u3051\u30b9\u30ad\u30c3\u30d7\u3057\u307e\u3059
+
+## estimate -> task 化メモ
+
+- `/estimate` 実行後、直近1件の見積情報をユーザー単位で SQLite に保持します。
+- 見積結果メッセージには `この内容でタスク作成` ボタンが表示されます。
+- ボタン押下時は、保持した見積情報を使って `/task` 相当の処理を再利用し、FANFIC / SCHEDULE へ登録します。
+- 手動 `/task` は引き続きそのまま使えます。
+- ボタン経由の task 化は、見積作成者本人のみ実行できます。
+- 保持した見積は直近1件のみ有効で、古い見積や処理済み見積は再利用できません。

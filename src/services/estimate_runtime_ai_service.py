@@ -74,6 +74,7 @@ def request_estimate_adjustment(
     difficulty: str | None,
     due_date: str,
     template_steps: list[EstimateStep],
+    simple_total_hours: float,
     calendar_context: dict[str, Any] | None = None,
 ) -> AIEstimateOutcome:
     if openai_client is None:
@@ -94,6 +95,7 @@ def request_estimate_adjustment(
             "work_type": work_type,
             "difficulty": difficulty or "unspecified",
             "due_date": due_date,
+            "simple_total_hours": f"{simple_total_hours:.2f}",
             "template_steps_json": json.dumps(template_steps, ensure_ascii=False, indent=2),
             "calendar_context_json": json.dumps(calendar_context or {}, ensure_ascii=False, indent=2),
         },

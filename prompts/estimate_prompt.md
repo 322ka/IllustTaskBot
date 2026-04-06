@@ -8,6 +8,7 @@ Inputs:
 - work_type: {work_type}
 - difficulty: {difficulty}
 - due_date: {due_date}
+- simple_total_hours: {simple_total_hours}
 
 Template steps:
 {template_steps_json}
