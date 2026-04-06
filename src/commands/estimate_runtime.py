@@ -15,6 +15,7 @@ from src.services.db_service import (
     mark_latest_estimate_task_created,
     save_latest_estimate,
 )
+from src.services.progress_service import save_estimate_snapshot
 from src.services.google_calendar_service import list_events, summarize_events
 from src.services.estimate_runtime_ai_service import request_estimate_adjustment
 from src.services.estimate_runtime_service import (
@@ -267,6 +268,7 @@ class EstimateTaskActionView(discord.ui.View):
         self.openai_client = openai_client
         self.task_runtime_options = task_runtime_options or {}
         self.is_processed = False
+        self.is_processing = False
 
     @discord.ui.button(label="この内容でタスク作成", style=discord.ButtonStyle.green)
     async def create_task_from_estimate(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -274,29 +276,79 @@ class EstimateTaskActionView(discord.ui.View):
             await interaction.response.send_message("このボタンは見積を作成した本人のみ使えます。", ephemeral=True)
             return
 
+        if self.is_processing:
+            await interaction.response.send_message("いま task 化を実行中です。少し待ってから結果を確認してください。", ephemeral=True)
+            return
+
+        if self.is_processed:
+            await interaction.response.send_message("この見積からの task 化はすでに処理済みです。", ephemeral=True)
+            return
+
+        self.is_processing = True
+        button.disabled = True
+        await interaction.response.defer(ephemeral=True)
+        if interaction.message:
+            try:
+                await interaction.message.edit(view=self)
+            except Exception as exc:
+                print(f"estimate->task button disable failed: {type(exc).__name__}: {exc}")
+
         record = get_latest_estimate(self.owner_user_id)
         if record is None:
-            await interaction.response.send_message("task 化できる見積が見つかりませんでした。もう一度 /estimate を実行してください。", ephemeral=True)
+            self.is_processing = False
+            button.disabled = False
+            if interaction.message:
+                try:
+                    await interaction.message.edit(view=self)
+                except Exception:
+                    pass
+            await interaction.followup.send("task 化できる見積が見つかりませんでした。もう一度 /estimate を実行してください。", ephemeral=True)
             return
 
         if record.estimate_created_at != self.estimate_created_at:
-            await interaction.response.send_message("より新しい見積があります。最新の見積結果から task 化してください。", ephemeral=True)
+            self.is_processing = False
+            button.disabled = False
+            if interaction.message:
+                try:
+                    await interaction.message.edit(view=self)
+                except Exception:
+                    pass
+            await interaction.followup.send("より新しい見積があります。最新の見積結果から task 化してください。", ephemeral=True)
             return
 
         created_at = datetime.fromisoformat(record.estimate_created_at)
         if (datetime.now(timezone.utc) - created_at).total_seconds() > ESTIMATE_EXPIRY_SECONDS:
-            await interaction.response.send_message("この見積結果は古くなったため失効しました。もう一度 /estimate を実行してください。", ephemeral=True)
+            self.is_processing = False
+            button.disabled = False
+            if interaction.message:
+                try:
+                    await interaction.message.edit(view=self)
+                except Exception:
+                    pass
+            await interaction.followup.send("この見積結果は古くなったため失効しました。もう一度 /estimate を実行してください。", ephemeral=True)
             return
 
-        if record.task_created_at or self.is_processed:
-            await interaction.response.send_message("この見積からの task 化はすでに処理済みです。", ephemeral=True)
+        if record.task_created_at:
+            self.is_processing = False
+            self.is_processed = True
+            if interaction.message:
+                try:
+                    await interaction.message.edit(view=self)
+                except Exception:
+                    pass
+            await interaction.followup.send("この見積からの task 化はすでに処理済みです。", ephemeral=True)
             return
-
-        await interaction.response.defer(ephemeral=True)
 
         notion_db_id = self.task_runtime_options.get("notion_db_id")
         notion = self.task_runtime_options.get("notion")
         if not notion_db_id or notion is None:
+            self.is_processing = False
+            button.disabled = False
+            if interaction.message:
+                try:
+                    await interaction.message.edit(view=self)
+                except Exception:
+                    pass
             await interaction.followup.send("task 化に必要な Notion 設定が不足しています。", ephemeral=True)
             return
 
@@ -327,12 +379,19 @@ class EstimateTaskActionView(discord.ui.View):
                 notion_prop_done=self.task_runtime_options["notion_prop_done"],
             )
         except Exception as exc:
+            self.is_processing = False
+            button.disabled = False
+            if interaction.message:
+                try:
+                    await interaction.message.edit(view=self)
+                except Exception:
+                    pass
             await interaction.followup.send(f"task 化に失敗しました: {exc}", ephemeral=True)
             return
 
         try:
             self.is_processed = True
-            button.disabled = True
+            self.is_processing = False
             mark_latest_estimate_task_created(self.owner_user_id)
             if interaction.message:
                 await interaction.message.edit(view=self)
@@ -386,6 +445,7 @@ class EstimateTaskActionView(discord.ui.View):
                 ephemeral=True,
             )
         except Exception as exc:
+            self.is_processing = False
             print(f"estimate->task post process failed: {type(exc).__name__}: {exc}")
             traceback.print_exc()
             await interaction.followup.send(
@@ -514,6 +574,16 @@ def register_estimate_command(
                 due_date=due_date,
                 work_category=work_category.value,
                 work_type=work_type.value,
+            )
+            save_estimate_snapshot(
+                user_id=str(interaction.user.id),
+                event_name=resolved_event_name,
+                work_title=work_title,
+                due_date=due_date,
+                work_category=work_category.value,
+                work_type=work_type.value,
+                steps=steps,
+                estimate_created_at=estimate_created_at,
             )
 
             stage = "display"

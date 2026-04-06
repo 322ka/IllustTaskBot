@@ -74,6 +74,39 @@ def init_db() -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS estimate_step_snapshots (
+                user_id TEXT NOT NULL,
+                event_name TEXT NOT NULL,
+                work_title TEXT NOT NULL,
+                due_date TEXT NOT NULL,
+                work_category TEXT NOT NULL,
+                work_type TEXT NOT NULL,
+                step_name TEXT NOT NULL,
+                step_order INTEGER NOT NULL,
+                estimated_hours REAL NOT NULL,
+                estimate_created_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, event_name, work_title, step_name)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS progress_records (
+                user_id TEXT NOT NULL,
+                event_name TEXT NOT NULL,
+                work_title TEXT NOT NULL,
+                step_name TEXT NOT NULL,
+                estimated_hours REAL,
+                actual_hours REAL NOT NULL,
+                progress_status TEXT NOT NULL,
+                memo TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, event_name, work_title, step_name)
+            )
+            """
+        )
         connection.commit()
 
 

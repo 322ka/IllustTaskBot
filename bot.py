@@ -15,6 +15,9 @@ load_dotenv(dotenv_path=BASE_DIR / ".env")
 from src.commands.event import register_event_command
 from src.commands.calendar_preview import register_calendar_preview_command
 from src.commands.estimate_runtime import register_estimate_command
+from src.commands.progress import register_progress_command
+from src.commands.reschedule import register_reschedule_command
+from src.commands.status import register_status_command
 from src.commands.task import register_task_command
 from src.services.db_service import init_db
 
@@ -106,6 +109,9 @@ register_event_command(
     fanfic_database_id=FANFIC_DB_ID,
 )
 register_calendar_preview_command(bot=bot)
+register_progress_command(bot=bot)
+register_status_command(bot=bot)
+register_reschedule_command(bot=bot)
 register_estimate_command(
     bot=bot,
     openai_client=openai_client,
