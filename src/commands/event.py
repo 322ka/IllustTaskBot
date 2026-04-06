@@ -4,10 +4,19 @@ import discord
 from discord.ext import commands
 
 from src.services.db_service import get_current_event, set_current_event
-from src.services.notion_service import EVENT_PROPERTY_NAME, ensure_select_option
+from src.services.notion_service import (
+    EVENT_PROPERTY_NAME,
+    ensure_event_page,
+    ensure_select_option,
+)
 
 
-def register_event_command(bot: commands.Bot, notion, notion_db_id: str | None) -> None:
+def register_event_command(
+    bot: commands.Bot,
+    notion,
+    notion_db_id: str | None,
+    event_database_id: str | None,
+) -> None:
     @bot.tree.command(name="event", description="現在のイベントを設定")
     async def set_event(
         interaction: discord.Interaction,
@@ -25,6 +34,7 @@ def register_event_command(bot: commands.Bot, notion, notion_db_id: str | None) 
 
             notice_lines = [f"現在のイベントを「{saved_event}」に設定しました。"]
             resolved_notion_db_id = notion_db_id or os.getenv("NOTION_DATABASE_ID")
+            resolved_event_database_id = event_database_id or os.getenv("EVENT_DATABASE_ID")
 
             if not resolved_notion_db_id:
                 notice_lines.append("⚠️ Notion DB ID が未設定のため、Notion 候補同期はスキップしました。")
@@ -44,6 +54,24 @@ def register_event_command(bot: commands.Bot, notion, notion_db_id: str | None) 
                     notice_lines.append(
                         f"⚠️ current_event の保存は成功しましたが、Notion候補追加は失敗しました: {str(notion_error)}"
                     )
+
+            if resolved_event_database_id:
+                try:
+                    page_result = ensure_event_page(
+                        notion=notion,
+                        database_id=resolved_event_database_id,
+                        event_name=event_name,
+                    )
+                    if page_result == "created":
+                        notice_lines.append("EVENT 一覧DBにも新規ページを作成しました。")
+                    else:
+                        notice_lines.append("EVENT 一覧DBには既に同名イベントがあります。")
+                except Exception as event_db_error:
+                    notice_lines.append(
+                        f"⚠️ current_event の保存は成功しましたが、EVENT 一覧DBへの反映は失敗しました: {str(event_db_error)}"
+                    )
+            else:
+                notice_lines.append("ℹ️ EVENT 一覧DB ID が未設定のため、EVENT DB へのページ作成はスキップしました。")
 
             await interaction.followup.send(
                 "\n".join(notice_lines),

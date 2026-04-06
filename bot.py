@@ -22,6 +22,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DB_ID = os.getenv("NOTION_DATABASE_ID")
+EVENT_DB_ID = os.getenv("EVENT_DATABASE_ID")
 REPORT_CHANNEL_ID = int(os.getenv("REPORT_CHANNEL_ID", "0"))
 
 intents = discord.Intents.default()
@@ -94,7 +95,12 @@ def build_select_property(
     return {"select": {"name": value}}
 
 
-register_event_command(bot=bot, notion=notion, notion_db_id=NOTION_DB_ID)
+register_event_command(
+    bot=bot,
+    notion=notion,
+    notion_db_id=NOTION_DB_ID,
+    event_database_id=EVENT_DB_ID,
+)
 register_task_command(
     bot=bot,
     openai_client=openai_client,

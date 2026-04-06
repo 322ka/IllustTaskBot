@@ -69,3 +69,70 @@ def ensure_select_option(
         },
     )
     return "added"
+
+
+def get_title_property_name(notion: Any, database_id: str) -> str:
+    database = notion.databases.retrieve(database_id=database_id)
+    properties = database.get("properties", {})
+
+    for prop_name, prop in properties.items():
+        if prop.get("type") == "title":
+            return prop_name
+
+    raise ValueError("Notion database に title プロパティが見つかりません。")
+
+
+def find_page_by_title(
+    notion: Any,
+    database_id: str,
+    title_property_name: str,
+    page_title: str,
+) -> dict | None:
+    response = notion.databases.query(
+        database_id=database_id,
+        filter={
+            "property": title_property_name,
+            "title": {
+                "equals": page_title,
+            },
+        },
+        page_size=1,
+    )
+
+    results = response.get("results", [])
+    if results:
+        return results[0]
+
+    return None
+
+
+def ensure_event_page(
+    notion: Any,
+    database_id: str,
+    event_name: str,
+) -> str:
+    title_property_name = get_title_property_name(notion, database_id)
+    existing_page = find_page_by_title(
+        notion=notion,
+        database_id=database_id,
+        title_property_name=title_property_name,
+        page_title=event_name,
+    )
+    if existing_page:
+        return "exists"
+
+    notion.pages.create(
+        parent={"database_id": database_id},
+        properties={
+            title_property_name: {
+                "title": [
+                    {
+                        "text": {
+                            "content": event_name,
+                        }
+                    }
+                ]
+            }
+        },
+    )
+    return "created"
