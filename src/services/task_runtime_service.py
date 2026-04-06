@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable
 
-from src.services.notion_service import ensure_fanfic_page, ensure_select_option, schedule_task_exists
+from src.services.notion_service import (
+    ensure_event_page_with_details,
+    ensure_fanfic_page,
+    ensure_select_option,
+    schedule_task_exists,
+)
 
 WORKFLOW_STEPS = [
     "情報収集",
@@ -119,6 +124,7 @@ def execute_task_registration(
     *,
     notion: Any,
     notion_db_id: str,
+    event_database_id: str | None,
     fanfic_database_id: str | None,
     tasks_list: list[dict[str, str]],
     work_title: str,
@@ -165,6 +171,26 @@ def execute_task_registration(
             sync_messages.append("SCHEDULE同期: イベント候補を追加しました。")
     except Exception as exc:
         warning_messages.append(f"{notion_prop_event}: '{event_name}' を設定できないためスキップ ({exc})")
+
+    if event_database_id:
+        try:
+            event_page_result, event_title_property_name = ensure_event_page_with_details(
+                notion=notion,
+                database_id=event_database_id,
+                event_name=event_name,
+            )
+            if event_page_result == "created":
+                sync_messages.append(
+                    f"EVENT同期: イベントページを作成しました。 (title: {event_title_property_name})"
+                )
+            else:
+                sync_messages.append(
+                    f"EVENT同期: 既存のイベントページを利用しました。 (title: {event_title_property_name})"
+                )
+        except Exception as exc:
+            warning_messages.append(f"EVENT同期に失敗しました: {exc}")
+    else:
+        sync_messages.append("EVENT同期: NOTION_EVENT_DATABASE_ID が未設定のためスキップしました。")
 
     if fanfic_database_id:
         try:

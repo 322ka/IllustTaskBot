@@ -112,6 +112,7 @@ register_estimate_command(
     task_runtime_options={
         "notion": notion,
         "notion_db_id": NOTION_DB_ID,
+        "event_database_id": EVENT_DB_ID,
         "fanfic_database_id": FANFIC_DB_ID,
         "get_database_schema_config": get_database_schema_config,
         "build_select_property": build_select_property,
@@ -127,6 +128,7 @@ register_task_command(
     openai_client=openai_client,
     notion=notion,
     notion_db_id=NOTION_DB_ID,
+    event_database_id=EVENT_DB_ID,
     fanfic_database_id=FANFIC_DB_ID,
     get_database_schema_config=get_database_schema_config,
     build_select_property=build_select_property,

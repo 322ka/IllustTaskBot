@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from datetime import datetime, timezone
+import traceback
 from typing import Any
 
 import discord
@@ -310,6 +311,7 @@ class EstimateTaskActionView(discord.ui.View):
             result = execute_task_registration(
                 notion=notion,
                 notion_db_id=notion_db_id,
+                event_database_id=self.task_runtime_options.get("event_database_id"),
                 fanfic_database_id=self.task_runtime_options.get("fanfic_database_id"),
                 tasks_list=tasks_list,
                 work_title=record.work_title,
@@ -328,60 +330,68 @@ class EstimateTaskActionView(discord.ui.View):
             await interaction.followup.send(f"task 化に失敗しました: {exc}", ephemeral=True)
             return
 
-        self.is_processed = True
-        button.disabled = True
-        mark_latest_estimate_task_created(self.owner_user_id)
-        if interaction.message:
-            await interaction.message.edit(view=self)
+        try:
+            self.is_processed = True
+            button.disabled = True
+            mark_latest_estimate_task_created(self.owner_user_id)
+            if interaction.message:
+                await interaction.message.edit(view=self)
 
-        fanfic_status_message = "FANFIC: 未処理です。"
-        if self.task_runtime_options.get("fanfic_database_id"):
-            fanfic_status_message = (
-                "FANFIC: 既存ページを利用しました。"
-                if result.fanfic_used_existing
-                else "FANFIC: 新規ページを作成しました。"
+            fanfic_status_message = "FANFIC: 未処理です。"
+            if self.task_runtime_options.get("fanfic_database_id"):
+                fanfic_status_message = (
+                    "FANFIC: 既存ページを利用しました。"
+                    if result.fanfic_used_existing
+                    else "FANFIC: 新規ページを作成しました。"
+                )
+                if result.fanfic_page_url is None:
+                    fanfic_status_message = "FANFIC: 同期結果を確認してください。"
+            else:
+                fanfic_status_message = "FANFIC: DB未設定のためスキップしました。"
+
+            result_lines = [
+                "見積結果から task 化を完了しました。",
+                f"作品名: {record.work_title}",
+                f"イベント名: {record.event_name}",
+                f"SCHEDULE作成件数: {result.created_count}件",
+                f"SCHEDULE重複スキップ: {result.skipped_duplicate_count}件",
+                fanfic_status_message,
+            ]
+
+            if result.fanfic_page_url:
+                result_lines.append(f"FANFICページ: {_format_notion_link(result.fanfic_page_url)}")
+
+            if result.created_schedule_page_urls:
+                preview_count = min(3, len(result.created_schedule_page_urls))
+                result_lines.append(f"SCHEDULEページ: {len(result.created_schedule_page_urls)}件（先頭 {preview_count} 件）")
+                result_lines.extend(
+                    f"- {_format_notion_link(url)}"
+                    for url in result.created_schedule_page_urls[:preview_count]
+                )
+                remaining_count = len(result.created_schedule_page_urls) - 3
+                if remaining_count > 0:
+                    result_lines.append(f"- ほか {remaining_count} 件")
+
+            if result.sync_messages:
+                result_lines.append("同期結果:")
+                result_lines.extend(f"- {message}" for message in result.sync_messages[:5])
+            if result.warning_messages:
+                result_lines.append("注意:")
+                result_lines.extend(f"- {message}" for message in result.warning_messages[:5])
+            else:
+                result_lines.append("エラー: なし")
+
+            await interaction.followup.send(
+                "\n".join(result_lines),
+                ephemeral=True,
             )
-            if result.fanfic_page_url is None:
-                fanfic_status_message = "FANFIC: 同期結果を確認してください。"
-        else:
-            fanfic_status_message = "FANFIC: DB未設定のためスキップしました。"
-
-        result_lines = [
-            "見積結果から task 化を完了しました。",
-            f"作品名: {record.work_title}",
-            f"イベント名: {record.event_name}",
-            f"SCHEDULE作成件数: {result.created_count}件",
-            f"SCHEDULE重複スキップ: {result.skipped_duplicate_count}件",
-            fanfic_status_message,
-        ]
-
-        if result.fanfic_page_url:
-            result_lines.append(f"FANFICページ: {_format_notion_link(result.fanfic_page_url)}")
-
-        if result.created_schedule_page_urls:
-            preview_count = min(3, len(result.created_schedule_page_urls))
-            result_lines.append(f"SCHEDULEページ: {len(result.created_schedule_page_urls)}件（先頭 {preview_count} 件）")
-            result_lines.extend(
-                f"- {_format_notion_link(url)}"
-                for url in result.created_schedule_page_urls[:preview_count]
+        except Exception as exc:
+            print(f"estimate->task post process failed: {type(exc).__name__}: {exc}")
+            traceback.print_exc()
+            await interaction.followup.send(
+                f"task 化は実行されましたが、結果表示の更新でエラーが発生しました: {exc}",
+                ephemeral=True,
             )
-            remaining_count = len(result.created_schedule_page_urls) - 3
-            if remaining_count > 0:
-                result_lines.append(f"- ほか {remaining_count} 件")
-
-        if result.sync_messages:
-            result_lines.append("同期結果:")
-            result_lines.extend(f"- {message}" for message in result.sync_messages[:5])
-        if result.warning_messages:
-            result_lines.append("注意:")
-            result_lines.extend(f"- {message}" for message in result.warning_messages[:5])
-        else:
-            result_lines.append("エラー: なし")
-
-        await interaction.followup.send(
-            "\n".join(result_lines),
-            ephemeral=True,
-        )
 
 
 

@@ -47,6 +47,7 @@ def register_task_command(
     openai_client: Any,
     notion: Any,
     notion_db_id: str | None,
+    event_database_id: str | None,
     fanfic_database_id: str | None,
     get_database_schema_config: Callable[[str], tuple[str, dict[str, set[str]]]],
     build_select_property: Callable[[str, str | None, dict[str, set[str]], list[str]], dict | None],
@@ -92,6 +93,7 @@ def register_task_command(
             return
 
         resolved_notion_db_id = notion_db_id or os.getenv("NOTION_DATABASE_ID")
+        resolved_event_database_id = event_database_id or os.getenv("NOTION_EVENT_DATABASE_ID")
         resolved_fanfic_database_id = fanfic_database_id or os.getenv("NOTION_FANFIC_DATABASE_ID")
         if not resolved_notion_db_id:
             await interaction.followup.send("NOTION_DATABASE_ID が設定されていません。")
@@ -108,6 +110,7 @@ def register_task_command(
             result = execute_task_registration(
                 notion=notion,
                 notion_db_id=resolved_notion_db_id,
+                event_database_id=resolved_event_database_id,
                 fanfic_database_id=resolved_fanfic_database_id,
                 tasks_list=tasks_list,
                 work_title=作品名,
