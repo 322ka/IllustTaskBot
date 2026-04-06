@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 
 import discord
@@ -56,11 +57,22 @@ def register_reschedule_command(bot: commands.Bot) -> None:
         await interaction.response.defer(ephemeral=True)
 
         resolved_event_name = event_name or get_current_event(str(interaction.user.id))
-        summaries = build_work_progress_summaries(
-            user_id=str(interaction.user.id),
-            event_name=resolved_event_name,
-            today=datetime.now().date(),
-        )
+        try:
+            summaries = await asyncio.wait_for(
+                asyncio.to_thread(
+                    build_work_progress_summaries,
+                    user_id=str(interaction.user.id),
+                    event_name=resolved_event_name,
+                    today=datetime.now().date(),
+                ),
+                timeout=15,
+            )
+        except asyncio.TimeoutError:
+            await interaction.followup.send(
+                "再調整案の集計に時間がかかりすぎています。少し待ってからもう一度試してください。",
+                ephemeral=True,
+            )
+            return
         if not summaries:
             await interaction.followup.send(
                 "再調整提案に使える見積または実績がまだありません。先に /estimate や /progress を使ってください。",
@@ -68,11 +80,22 @@ def register_reschedule_command(bot: commands.Bot) -> None:
             )
             return
 
-        suggestions = build_reschedule_suggestions(
-            user_id=str(interaction.user.id),
-            event_name=resolved_event_name,
-            today=datetime.now().date(),
-        )
+        try:
+            suggestions = await asyncio.wait_for(
+                asyncio.to_thread(
+                    build_reschedule_suggestions,
+                    user_id=str(interaction.user.id),
+                    event_name=resolved_event_name,
+                    today=datetime.now().date(),
+                ),
+                timeout=15,
+            )
+        except asyncio.TimeoutError:
+            await interaction.followup.send(
+                "再調整案の優先順位計算に時間がかかりすぎています。少し待ってからもう一度試してください。",
+                ephemeral=True,
+            )
+            return
 
         lines = ["再スケジュール案です。"]
         if resolved_event_name:
@@ -96,7 +119,14 @@ def register_reschedule_command(bot: commands.Bot) -> None:
             lines.append("危険な締切:")
             lines.extend(f"- {line}" for line in urgent_lines)
 
-        calendar_context = _build_calendar_context_text(summaries, resolved_event_name)
+        try:
+            calendar_context = await asyncio.wait_for(
+                asyncio.to_thread(_build_calendar_context_text, summaries, resolved_event_name),
+                timeout=15,
+            )
+        except asyncio.TimeoutError:
+            calendar_context = None
+            lines.append("Google予定の集計は時間超過のため今回は省略しました。")
         if calendar_context:
             lines.append(calendar_context)
 
