@@ -7,6 +7,7 @@ from discord.ext import commands
 from src.services.db_service import get_current_event, set_current_event
 from src.services.notion_service import (
     EVENT_PROPERTY_NAME,
+    FANFIC_EVENT_PROPERTY_NAME,
     ensure_event_page_with_details,
     ensure_select_option,
 )
@@ -17,6 +18,7 @@ def register_event_command(
     notion,
     notion_db_id: str | None,
     event_database_id: str | None,
+    fanfic_database_id: str | None,
 ) -> None:
     @bot.tree.command(name="event", description="現在のイベントを設定")
     async def set_event(
@@ -41,6 +43,7 @@ def register_event_command(
 
             resolved_notion_db_id = notion_db_id or os.getenv("NOTION_DATABASE_ID")
             resolved_event_database_id = event_database_id or os.getenv("NOTION_EVENT_DATABASE_ID")
+            resolved_fanfic_database_id = fanfic_database_id or os.getenv("NOTION_FANFIC_DATABASE_ID")
 
             if not resolved_notion_db_id:
                 notice_lines.append(
@@ -93,6 +96,30 @@ def register_event_command(
                 notice_lines.append(
                     "⚠️ EVENT DB同期: NOTION_EVENT_DATABASE_ID が未設定のため、"
                     "EVENT DB へのページ作成をスキップしました。"
+                )
+
+            if resolved_fanfic_database_id:
+                try:
+                    fanfic_sync_result = ensure_select_option(
+                        notion=notion,
+                        database_id=resolved_fanfic_database_id,
+                        property_name=FANFIC_EVENT_PROPERTY_NAME,
+                        option_name=event_name,
+                    )
+                    if fanfic_sync_result == "added":
+                        notice_lines.append("FANFIC同期: イベント候補を追加しました。")
+                    else:
+                        notice_lines.append("FANFIC同期: イベント候補は既に存在しています。")
+                except Exception as fanfic_error:
+                    traceback.print_exc()
+                    notice_lines.append(
+                        "⚠️ FANFIC同期に失敗しました: "
+                        f"{type(fanfic_error).__name__}: {str(fanfic_error)}"
+                    )
+            else:
+                notice_lines.append(
+                    "⚠️ FANFIC同期: NOTION_FANFIC_DATABASE_ID が未設定のため、"
+                    "FANFIC DB のイベント候補同期をスキップしました。"
                 )
 
             await interaction.followup.send(

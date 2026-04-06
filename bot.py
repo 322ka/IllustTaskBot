@@ -101,6 +101,7 @@ register_event_command(
     notion=notion,
     notion_db_id=NOTION_DB_ID,
     event_database_id=EVENT_DB_ID,
+    fanfic_database_id=FANFIC_DB_ID,
 )
 register_task_command(
     bot=bot,

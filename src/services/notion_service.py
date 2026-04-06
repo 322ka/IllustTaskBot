@@ -4,6 +4,7 @@ from typing import Any
 
 
 EVENT_PROPERTY_NAME = "イベント名(進捗管理用)"
+FANFIC_EVENT_PROPERTY_NAME = "イベント"
 
 
 def get_select_options(
