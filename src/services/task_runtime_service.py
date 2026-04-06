@@ -66,6 +66,8 @@ class TaskExecutionResult:
     fanfic_used_existing: bool = False
     created_schedule_page_urls: list[str] | None = None
     auto_shifted_count: int = 0
+    schedule_blocked: bool = False
+    suggested_due_date: str | None = None
 
 
 @dataclass
@@ -287,7 +289,6 @@ def execute_task_registration(
     skipped_duplicate_count = 0
     auto_shifted_count = 0
     updated_tasks_list: list[dict[str, str]] = []
-    schedule_load_cache: dict[str, float] = {}
     snapshot_hours_map: dict[tuple[str, str, str], float] = {}
     progress_hours_map: dict[tuple[str, str, str], float] = {}
 
@@ -305,7 +306,6 @@ def execute_task_registration(
         for task in tasks_list
         if task.get("deadline")
     ]
-    calendar_summary = None
     calendar_error = None
     calendar_events: list[Any] = []
     if parsed_deadlines:
@@ -318,8 +318,9 @@ def execute_task_registration(
         if calendar_error:
             warning_messages.append(f"Googleカレンダー参照に失敗しました: {calendar_error}")
         else:
-            calendar_summary = summarize_events(calendar_events)
+            summarize_events(calendar_events)
     blocked_hours_map = build_daily_blocked_hours(calendar_events) if calendar_events else {}
+    earliest_allowed_date = datetime.now().date() + timedelta(days=1)
 
     def get_day_capacity_hours(date_value: str) -> float:
         blocked_hours = blocked_hours_map.get(date_value, 0.0)
@@ -341,10 +342,41 @@ def execute_task_registration(
             return snapshot_hours_map[snapshot_key]
         return estimate_task_hours(step_name, weighted=False)
 
-    def get_existing_schedule_load(date_value: str) -> float:
-        if date_value in schedule_load_cache:
-            return schedule_load_cache[date_value]
+    def build_base_schedule_load_cache() -> dict[str, float]:
+        cache: dict[str, float] = {}
+        checked_dates = {
+            max(datetime.strptime(task["deadline"], "%Y-%m-%d").date(), earliest_allowed_date).isoformat()
+            for task in tasks_list
+            if task.get("deadline")
+        }
+        if not checked_dates:
+            return cache
+        start_date = min(datetime.strptime(date_value, "%Y-%m-%d").date() for date_value in checked_dates)
+        end_date = max(datetime.strptime(date_value, "%Y-%m-%d").date() for date_value in checked_dates)
+        current_date = start_date
+        while current_date <= end_date:
+            date_value = current_date.isoformat()
+            entries = list_schedule_entries_on_date(
+                notion=notion,
+                database_id=notion_db_id,
+                title_property_name=title_property_name,
+                work_title_property_name=notion_prop_work_title,
+                date_property_name=notion_prop_schedule_date,
+                date_value=date_value,
+            )
+            load_hours = 0.0
+            for entry in entries:
+                load_hours += estimate_existing_schedule_entry_hours(
+                    entry_title=entry["title"],
+                    entry_work_title=entry["work_title"],
+                )
+            cache[date_value] = round(load_hours, 2)
+            current_date += timedelta(days=1)
+        return cache
 
+    def get_schedule_load(load_cache: dict[str, float], date_value: str) -> float:
+        if date_value in load_cache:
+            return load_cache[date_value]
         entries = list_schedule_entries_on_date(
             notion=notion,
             database_id=notion_db_id,
@@ -359,34 +391,46 @@ def execute_task_registration(
                 entry_title=entry["title"],
                 entry_work_title=entry["work_title"],
             )
+        load_cache[date_value] = round(load_hours, 2)
+        return load_cache[date_value]
 
-        schedule_load_cache[date_value] = round(load_hours, 2)
-        return schedule_load_cache[date_value]
-
-    def resolve_schedule_deadline(original_deadline: str, task_name: str) -> str:
+    def resolve_schedule_deadline(original_deadline: str, task_name: str, load_cache: dict[str, float]) -> str | None:
         nonlocal auto_shifted_count
         candidate_date = datetime.strptime(original_deadline, "%Y-%m-%d").date()
-        earliest_allowed_date = datetime.now().date()
         if candidate_date < earliest_allowed_date:
             candidate_date = earliest_allowed_date
         task_hours = estimate_task_hours(task_name, weighted=True)
 
         while candidate_date >= earliest_allowed_date:
             candidate_key = candidate_date.isoformat()
-            existing_load = get_existing_schedule_load(candidate_key)
+            existing_load = get_schedule_load(load_cache, candidate_key)
             if existing_load + task_hours <= get_day_capacity_hours(candidate_key):
-                schedule_load_cache[candidate_key] = round(existing_load + task_hours, 2)
+                load_cache[candidate_key] = round(existing_load + task_hours, 2)
                 if candidate_key != original_deadline:
                     auto_shifted_count += 1
                 return candidate_key
             candidate_date -= timedelta(days=1)
+        return None
 
-        fallback_key = earliest_allowed_date.isoformat()
-        fallback_load = get_existing_schedule_load(fallback_key)
-        schedule_load_cache[fallback_key] = round(fallback_load + task_hours, 2)
-        if fallback_key != original_deadline:
-            auto_shifted_count += 1
-        return fallback_key
+    def suggest_realistic_due_date(task_names: list[str], base_load_cache: dict[str, float]) -> str:
+        load_cache = dict(base_load_cache)
+        candidate_date = earliest_allowed_date
+        last_assigned_key = earliest_allowed_date.isoformat()
+        for task_name in task_names:
+            task_hours = estimate_task_hours(task_name, weighted=True)
+            while True:
+                candidate_key = candidate_date.isoformat()
+                existing_load = get_schedule_load(load_cache, candidate_key)
+                if existing_load + task_hours <= get_day_capacity_hours(candidate_key):
+                    load_cache[candidate_key] = round(existing_load + task_hours, 2)
+                    last_assigned_key = candidate_key
+                    break
+                candidate_date += timedelta(days=1)
+        return last_assigned_key
+
+    base_schedule_load_cache = build_base_schedule_load_cache()
+
+    pending_schedule_tasks: list[tuple[dict[str, str], str]] = []
 
     for task in tasks_list:
         try:
@@ -406,10 +450,62 @@ def execute_task_registration(
                 skipped_duplicate_count += 1
                 updated_tasks_list.append(dict(task))
                 continue
+            pending_schedule_tasks.append((dict(task), schedule_title))
+        except KeyError as exc:
+            warning_messages.append(f"タスクデータ不足のためスキップしました: {exc}")
+        except Exception as exc:
+            warning_messages.append(f"{task.get('task_name', 'Unknown')} の登録準備に失敗しました: {exc}")
+            traceback.print_exc()
 
-            deadline = resolve_schedule_deadline(task["deadline"], task_name)
-            updated_task = dict(task)
-            updated_task["deadline"] = deadline
+    planning_load_cache = dict(base_schedule_load_cache)
+    planned_schedule_tasks: list[tuple[dict[str, str], str]] = []
+    schedule_blocked = False
+    suggested_due_date: str | None = None
+    blocked_task_name: str | None = None
+
+    for task, schedule_title in pending_schedule_tasks:
+        deadline = resolve_schedule_deadline(task["deadline"], task["task_name"], planning_load_cache)
+        if deadline is None:
+            schedule_blocked = True
+            blocked_task_name = task["task_name"]
+            break
+        updated_task = dict(task)
+        updated_task["deadline"] = deadline
+        planned_schedule_tasks.append((updated_task, schedule_title))
+
+    if schedule_blocked:
+        suggested_due_date = suggest_realistic_due_date(
+            [task["task_name"] for task, _ in pending_schedule_tasks],
+            dict(base_schedule_load_cache),
+        )
+        warning_messages.append(
+            "現在のGoogle予定と既存スケジュールを考慮すると、この締切では現実的に収まりません。"
+        )
+        if blocked_task_name:
+            warning_messages.append(f"最初に収まりきらなかった工程: {blocked_task_name}")
+        sync_messages.append(
+            f"SCHEDULE同期: 現在の負荷では登録を見送りました。現実的な仕上げ期限候補は {suggested_due_date} です。"
+        )
+        return TaskExecutionResult(
+            total_count=len(tasks_list),
+            created_count=0,
+            skipped_duplicate_count=skipped_duplicate_count,
+            sync_messages=sync_messages,
+            warning_messages=sorted(set(warning_messages)),
+            tasks_list=updated_tasks_list or tasks_list,
+            fanfic_page_url=fanfic_page_url,
+            fanfic_used_existing=fanfic_used_existing,
+            created_schedule_page_urls=created_schedule_page_urls,
+            auto_shifted_count=0,
+            schedule_blocked=True,
+            suggested_due_date=suggested_due_date,
+        )
+
+    creation_load_cache = dict(base_schedule_load_cache)
+
+    for task, schedule_title in planned_schedule_tasks:
+        try:
+            deadline = task["deadline"]
 
             properties = {
                 title_property_name: {"title": [{"text": {"content": schedule_title}}]},
@@ -451,7 +547,7 @@ def execute_task_registration(
             if created_page.get("url"):
                 created_schedule_page_urls.append(created_page["url"])
             created_count += 1
-            updated_tasks_list.append(updated_task)
+            updated_tasks_list.append(dict(task))
         except KeyError as exc:
             warning_messages.append(f"タスクデータ不足のためスキップしました: {exc}")
         except Exception as exc:
@@ -474,6 +570,8 @@ def execute_task_registration(
         fanfic_used_existing=fanfic_used_existing,
         created_schedule_page_urls=created_schedule_page_urls,
         auto_shifted_count=auto_shifted_count,
+        schedule_blocked=False,
+        suggested_due_date=None,
     )
 
 

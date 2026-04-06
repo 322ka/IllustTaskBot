@@ -388,10 +388,14 @@ class EstimateTaskActionView(discord.ui.View):
             return
 
         try:
-            self.is_processed = True
             self.is_processing = False
-            await asyncio.to_thread(mark_latest_estimate_task_created, self.owner_user_id)
-            await _safe_refresh_view(interaction, self)
+            if result.schedule_blocked:
+                button.disabled = False
+                await _safe_refresh_view(interaction, self)
+            else:
+                self.is_processed = True
+                await asyncio.to_thread(mark_latest_estimate_task_created, self.owner_user_id)
+                await _safe_refresh_view(interaction, self)
 
             fanfic_status_message = "FANFIC: 未処理です。"
             if self.task_runtime_options.get("fanfic_database_id"):
@@ -409,10 +413,17 @@ class EstimateTaskActionView(discord.ui.View):
                 "見積結果から task 化を完了しました。",
                 f"作品名: {record.work_title}",
                 f"イベント名: {record.event_name}",
-                f"SCHEDULE作成件数: {result.created_count}件",
+                (
+                    f"SCHEDULE作成件数: {result.created_count}件"
+                    if not result.schedule_blocked
+                    else "SCHEDULE作成件数: 0件（登録見送り）"
+                ),
                 f"SCHEDULE重複スキップ: {result.skipped_duplicate_count}件",
                 fanfic_status_message,
             ]
+
+            if result.schedule_blocked and result.suggested_due_date:
+                result_lines.append(f"提案する仕上げ期限: {result.suggested_due_date}")
 
             if result.fanfic_page_url:
                 result_lines.append(f"FANFICページ: {_format_notion_link(result.fanfic_page_url)}")

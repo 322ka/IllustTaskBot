@@ -134,11 +134,27 @@ def register_task_command(
             await interaction.followup.send(f"エラー: {exc}")
             return
 
-        embed = discord.Embed(
-            title="プロジェクト自動分解完了！",
-            description=f"**{作品名}** を {result.created_count} 件のタスクに登録しました",
-            color=discord.Color.green(),
-        )
+        if result.schedule_blocked:
+            embed = discord.Embed(
+                title="スケジュール登録を見送りました",
+                description=(
+                    f"**{作品名}** は、現在の予定と既存タスクを考慮すると "
+                    "この締切では現実的に収まりません。"
+                ),
+                color=discord.Color.orange(),
+            )
+            if result.suggested_due_date:
+                embed.add_field(
+                    name="提案する仕上げ期限",
+                    value=result.suggested_due_date,
+                    inline=False,
+                )
+        else:
+            embed = discord.Embed(
+                title="プロジェクト自動分解完了！",
+                description=f"**{作品名}** を {result.created_count} 件のタスクに登録しました",
+                color=discord.Color.green(),
+            )
         task_text = "\n".join(
             f"**{task['task_name']}** → {task['deadline']}"
             for task in sorted(result.tasks_list, key=lambda item: item["deadline"])
