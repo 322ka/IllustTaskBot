@@ -387,8 +387,97 @@ def list_schedule_entries_on_date(
         if title_text:
             entries.append(
                 {
+                    "id": result.get("id", ""),
                     "title": title_text,
                     "work_title": work_title_value,
+                    "url": result.get("url", ""),
                 }
             )
     return entries
+
+
+def list_schedule_entries_for_event(
+    notion: Any,
+    database_id: str,
+    title_property_name: str,
+    work_title_property_name: str,
+    event_property_name: str,
+    date_property_name: str,
+    done_property_name: str,
+    event_value: str,
+    *,
+    include_done: bool = False,
+) -> list[dict[str, str | bool]]:
+    filters: list[dict[str, Any]] = [
+        {
+            "property": event_property_name,
+            "select": {
+                "equals": event_value,
+            },
+        }
+    ]
+    if not include_done:
+        filters.append(
+            {
+                "property": done_property_name,
+                "checkbox": {
+                    "equals": False,
+                },
+            }
+        )
+
+    response = notion.databases.query(
+        database_id=database_id,
+        filter={"and": filters},
+        page_size=100,
+    )
+
+    entries: list[dict[str, str | bool]] = []
+    for result in response.get("results", []):
+        properties = result.get("properties", {})
+        title_items = properties.get(title_property_name, {}).get("title", [])
+        title_text = "".join(item.get("plain_text", "") for item in title_items).strip()
+        work_title_value = (
+            properties.get(work_title_property_name, {})
+            .get("select", {})
+            .get("name", "")
+        )
+        date_value = (
+            properties.get(date_property_name, {})
+            .get("date", {})
+            .get("start", "")
+        )
+        done_value = (
+            properties.get(done_property_name, {})
+            .get("checkbox", False)
+        )
+        if title_text and date_value:
+            entries.append(
+                {
+                    "id": result.get("id", ""),
+                    "title": title_text,
+                    "work_title": work_title_value,
+                    "date": date_value,
+                    "done": done_value,
+                    "url": result.get("url", ""),
+                }
+            )
+    return entries
+
+
+def update_schedule_entry_date(
+    notion: Any,
+    page_id: str,
+    date_property_name: str,
+    date_value: str,
+) -> None:
+    notion.pages.update(
+        page_id=page_id,
+        properties={
+            date_property_name: {
+                "date": {
+                    "start": date_value,
+                }
+            }
+        },
+    )

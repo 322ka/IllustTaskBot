@@ -12,8 +12,10 @@ from src.services.notion_service import (
     ensure_event_page_with_details,
     ensure_fanfic_page,
     ensure_select_option,
+    list_schedule_entries_for_event,
     list_schedule_entries_on_date,
     schedule_task_exists,
+    update_schedule_entry_date,
 )
 from src.services.progress_service import list_estimate_snapshots, list_progress_records
 
@@ -64,6 +66,16 @@ class TaskExecutionResult:
     fanfic_used_existing: bool = False
     created_schedule_page_urls: list[str] | None = None
     auto_shifted_count: int = 0
+
+
+@dataclass
+class RescheduleExecutionResult:
+    target_count: int
+    moved_count: int
+    unchanged_count: int
+    sync_messages: list[str]
+    warning_messages: list[str]
+    moved_page_urls: list[str]
 
 
 TASK_JSON_EXAMPLE = """[
@@ -143,6 +155,16 @@ def generate_task_plan(
     if not isinstance(tasks_list, list):
         raise ValueError("AI の応答形式が不正です。")
     return tasks_list
+
+
+def _extract_step_name_from_schedule_title(title: str) -> str:
+    if "｜" in title:
+        return title.split("｜")[-1].strip()
+    if "：" in title:
+        return title.split("：")[-1].strip()
+    if ":" in title:
+        return title.split(":")[-1].strip()
+    return title.strip()
 
 
 def execute_task_registration(
@@ -310,7 +332,7 @@ def execute_task_registration(
         return base_hours
 
     def estimate_existing_schedule_entry_hours(*, entry_title: str, entry_work_title: str) -> float:
-        step_name = entry_title.split("：")[-1].strip()
+        step_name = _extract_step_name_from_schedule_title(entry_title)
         progress_key = (event_name, entry_work_title, step_name)
         if progress_key in progress_hours_map:
             return progress_hours_map[progress_key]
@@ -344,9 +366,12 @@ def execute_task_registration(
     def resolve_schedule_deadline(original_deadline: str, task_name: str) -> str:
         nonlocal auto_shifted_count
         candidate_date = datetime.strptime(original_deadline, "%Y-%m-%d").date()
+        earliest_allowed_date = datetime.now().date()
+        if candidate_date < earliest_allowed_date:
+            candidate_date = earliest_allowed_date
         task_hours = estimate_task_hours(task_name, weighted=True)
 
-        for _ in range(30):
+        while candidate_date >= earliest_allowed_date:
             candidate_key = candidate_date.isoformat()
             existing_load = get_existing_schedule_load(candidate_key)
             if existing_load + task_hours <= get_day_capacity_hours(candidate_key):
@@ -356,7 +381,12 @@ def execute_task_registration(
                 return candidate_key
             candidate_date -= timedelta(days=1)
 
-        return original_deadline
+        fallback_key = earliest_allowed_date.isoformat()
+        fallback_load = get_existing_schedule_load(fallback_key)
+        schedule_load_cache[fallback_key] = round(fallback_load + task_hours, 2)
+        if fallback_key != original_deadline:
+            auto_shifted_count += 1
+        return fallback_key
 
     for task in tasks_list:
         try:
@@ -444,4 +474,167 @@ def execute_task_registration(
         fanfic_used_existing=fanfic_used_existing,
         created_schedule_page_urls=created_schedule_page_urls,
         auto_shifted_count=auto_shifted_count,
+    )
+
+
+def execute_schedule_reschedule(
+    *,
+    notion: Any,
+    notion_db_id: str,
+    event_name: str,
+    user_id: str | None,
+    get_database_schema_config: Callable[[str], tuple[str, dict[str, set[str]]]],
+    notion_prop_schedule_date: str,
+    notion_prop_event: str,
+    notion_prop_work_title: str,
+    notion_prop_done: str,
+) -> RescheduleExecutionResult:
+    title_property_name, _ = get_database_schema_config(notion_db_id)
+    warning_messages: list[str] = []
+    sync_messages: list[str] = []
+    moved_page_urls: list[str] = []
+    schedule_load_cache: dict[str, float] = {}
+    snapshot_hours_map: dict[tuple[str, str, str], float] = {}
+    progress_hours_map: dict[tuple[str, str, str], float] = {}
+
+    if user_id:
+        try:
+            for snapshot in list_estimate_snapshots(user_id=user_id, event_name=event_name):
+                snapshot_hours_map[(snapshot.event_name, snapshot.work_title, snapshot.step_name)] = snapshot.estimated_hours
+            for record in list_progress_records(user_id=user_id, event_name=event_name):
+                progress_hours_map[(record.event_name, record.work_title, record.step_name)] = record.actual_hours
+        except Exception as exc:
+            warning_messages.append(f"実績参照に失敗しました: {exc}")
+
+    entries = list_schedule_entries_for_event(
+        notion=notion,
+        database_id=notion_db_id,
+        title_property_name=title_property_name,
+        work_title_property_name=notion_prop_work_title,
+        event_property_name=notion_prop_event,
+        date_property_name=notion_prop_schedule_date,
+        done_property_name=notion_prop_done,
+        event_value=event_name,
+        include_done=False,
+    )
+    if not entries:
+        return RescheduleExecutionResult(
+            target_count=0,
+            moved_count=0,
+            unchanged_count=0,
+            sync_messages=["再調整対象の未完了タスクはありません。"],
+            warning_messages=[],
+            moved_page_urls=[],
+        )
+
+    target_ids = {str(entry["id"]) for entry in entries}
+    target_entries = sorted(
+        entries,
+        key=lambda entry: (str(entry["date"]), str(entry["title"])),
+    )
+
+    parsed_dates = [
+        datetime.strptime(str(entry["date"])[:10], "%Y-%m-%d").date()
+        for entry in target_entries
+    ]
+    calendar_events: list[Any] = []
+    calendar_error = None
+    if parsed_dates:
+        calendar_events, calendar_error = list_events(
+            calendar_id=None,
+            time_min=datetime.combine(datetime.now().date(), datetime.min.time()),
+            time_max=datetime.combine(max(parsed_dates), datetime.max.time()),
+            max_results=200,
+        )
+        if calendar_error:
+            warning_messages.append(f"Googleカレンダー参照に失敗しました: {calendar_error}")
+    blocked_hours_map = build_daily_blocked_hours(calendar_events) if calendar_events else {}
+
+    def get_day_capacity_hours(date_value: str) -> float:
+        blocked_hours = blocked_hours_map.get(date_value, 0.0)
+        return max(DAY_CAPACITY_HOURS - blocked_hours, 0.0)
+
+    def estimate_entry_hours(*, entry_title: str, entry_work_title: str) -> float:
+        step_name = _extract_step_name_from_schedule_title(entry_title)
+        progress_key = (event_name, entry_work_title, step_name)
+        if progress_key in progress_hours_map:
+            return progress_hours_map[progress_key]
+        snapshot_key = (event_name, entry_work_title, step_name)
+        if snapshot_key in snapshot_hours_map:
+            return snapshot_hours_map[snapshot_key]
+        return WORKFLOW_STEP_BASE_HOURS.get(step_name, DEFAULT_TASK_HOURS)
+
+    def get_existing_schedule_load(date_value: str) -> float:
+        if date_value in schedule_load_cache:
+            return schedule_load_cache[date_value]
+
+        same_day_entries = list_schedule_entries_on_date(
+            notion=notion,
+            database_id=notion_db_id,
+            title_property_name=title_property_name,
+            work_title_property_name=notion_prop_work_title,
+            date_property_name=notion_prop_schedule_date,
+            date_value=date_value,
+        )
+        load_hours = 0.0
+        for entry in same_day_entries:
+            if str(entry.get("id", "")) in target_ids:
+                continue
+            load_hours += estimate_entry_hours(
+                entry_title=str(entry["title"]),
+                entry_work_title=str(entry["work_title"]),
+            )
+        schedule_load_cache[date_value] = round(load_hours, 2)
+        return schedule_load_cache[date_value]
+
+    moved_count = 0
+    unchanged_count = 0
+    today = datetime.now().date()
+
+    for entry in target_entries:
+        original_date = datetime.strptime(str(entry["date"])[:10], "%Y-%m-%d").date()
+        candidate_date = max(today, original_date)
+        task_hours = estimate_entry_hours(
+            entry_title=str(entry["title"]),
+            entry_work_title=str(entry["work_title"]),
+        )
+
+        assigned_key: str | None = None
+        for _ in range(90):
+            candidate_key = candidate_date.isoformat()
+            existing_load = get_existing_schedule_load(candidate_key)
+            if existing_load + task_hours <= get_day_capacity_hours(candidate_key):
+                schedule_load_cache[candidate_key] = round(existing_load + task_hours, 2)
+                assigned_key = candidate_key
+                break
+            candidate_date += timedelta(days=1)
+
+        if assigned_key is None:
+            assigned_key = candidate_date.isoformat()
+
+        if assigned_key != original_date.isoformat():
+            update_schedule_entry_date(
+                notion=notion,
+                page_id=str(entry["id"]),
+                date_property_name=notion_prop_schedule_date,
+                date_value=assigned_key,
+            )
+            moved_count += 1
+            if entry.get("url"):
+                moved_page_urls.append(str(entry["url"]))
+        else:
+            unchanged_count += 1
+
+    if moved_count:
+        sync_messages.append(f"再調整: {moved_count} 件のタスク日付を再配置しました。")
+    if unchanged_count:
+        sync_messages.append(f"再調整: {unchanged_count} 件はそのまま維持しました。")
+
+    return RescheduleExecutionResult(
+        target_count=len(target_entries),
+        moved_count=moved_count,
+        unchanged_count=unchanged_count,
+        sync_messages=sync_messages,
+        warning_messages=warning_messages,
+        moved_page_urls=moved_page_urls,
     )
