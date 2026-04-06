@@ -119,8 +119,6 @@ async def add_task(
                 
                 notion.pages.create(
                     parent={"database_id": NOTION_DB_ID},
-                notion.pages.create(
-                    parent={"database_id": NOTION_DB_ID},
                     properties={
                         "作品タイトル名(...)": {
                             "title": [{"text": {"content": f"{task['task_name']}"}}]
