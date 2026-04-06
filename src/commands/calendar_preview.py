@@ -17,11 +17,6 @@ def _format_calendar_event_time(start: str, is_all_day: bool) -> str:
 
 def register_calendar_preview_command(bot: commands.Bot) -> None:
     @bot.tree.command(name="calendar_preview", description="\u6307\u5b9a\u671f\u9593\u306e Google \u30ab\u30ec\u30f3\u30c0\u30fc\u4e88\u5b9a\u3092\u78ba\u8a8d")
-    @app_commands.rename(
-        start_date="\u958b\u59cb\u65e5",
-        end_date="\u7d42\u4e86\u65e5",
-        calendar_id="\u30ab\u30ec\u30f3\u30c0\u30fcID",
-    )
     @app_commands.describe(
         start_date="\u958b\u59cb\u65e5\u3092 YYYY-MM-DD \u5f62\u5f0f\u3067\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044",
         end_date="\u7d42\u4e86\u65e5\u3092 YYYY-MM-DD \u5f62\u5f0f\u3067\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044",
