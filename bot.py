@@ -120,7 +120,7 @@ async def add_task(
                 notion.pages.create(
                     parent={"database_id": NOTION_DB_ID},
                     properties={
-                        "作品タイトル名(...)": {
+                        "作品タイトル名(進捗管理用)": {
                             "title": [{"text": {"content": f"{task['task_name']}"}}]
                         },
                         "カテゴリ": {
@@ -129,7 +129,7 @@ async def add_task(
                         "予定": {
                             "date": {"start": task["deadline"]}
                         },
-                        "イベント名(進捗...)": {
+                        "イベント名(進捗管理用)": {
                             "select": {"name": 種類}
                         },
                         "済": {
