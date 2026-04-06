@@ -72,7 +72,7 @@ def _build_calendar_note(
         return None, None
 
     events, error = list_events(
-        calendar_id="primary",
+        calendar_id=None,
         time_min=datetime.combine(today, datetime.min.time()),
         time_max=datetime.combine(due_date, datetime.max.time()),
         max_results=50,

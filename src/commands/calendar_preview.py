@@ -42,7 +42,7 @@ def register_calendar_preview_command(bot: commands.Bot) -> None:
             return
 
         events, error = list_events(
-            calendar_id=calendar_id or "primary",
+            calendar_id=calendar_id,
             time_min=start_dt,
             time_max=end_dt,
             max_results=10,
