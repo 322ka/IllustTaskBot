@@ -38,7 +38,11 @@ def register_event_command(
             else:
                 notice_lines = [f"現在のイベントを「{saved_event}」に設定しました。"]
             resolved_notion_db_id = notion_db_id or os.getenv("NOTION_DATABASE_ID")
-            resolved_event_database_id = event_database_id or os.getenv("EVENT_DATABASE_ID")
+            resolved_event_database_id = (
+                event_database_id
+                or os.getenv("NOTION_EVENT_DATABASE_ID")
+                or os.getenv("EVENT_DATABASE_ID")
+            )
 
             if not resolved_notion_db_id:
                 notice_lines.append("⚠️ Notion DB ID が未設定のため、Notion 候補同期はスキップしました。")
@@ -75,7 +79,9 @@ def register_event_command(
                         f"⚠️ current_event の保存は成功しましたが、EVENT 一覧DBへの反映は失敗しました: {str(event_db_error)}"
                     )
             else:
-                notice_lines.append("ℹ️ EVENT 一覧DB ID が未設定のため、EVENT DB へのページ作成はスキップしました。")
+                notice_lines.append(
+                    "ℹ️ NOTION_EVENT_DATABASE_ID が未設定のため、EVENT DB へのページ作成はスキップしました。"
+                )
 
             await interaction.followup.send(
                 "\n".join(notice_lines),
