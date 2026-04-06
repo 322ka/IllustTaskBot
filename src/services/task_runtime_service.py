@@ -361,7 +361,7 @@ def execute_task_registration(
     for task in tasks_list:
         try:
             task_name = task["task_name"]
-            schedule_title = f"{event_name}：{task_name}"
+            schedule_title = f"{event_name}｜{work_title}｜{task_name}"
 
             if schedule_task_exists(
                 notion=notion,
