@@ -10,6 +10,7 @@ import discord
 from discord.ext import commands
 
 from src.services.db_service import get_current_event
+from src.services.notion_service import ensure_fanfic_page, ensure_select_option
 
 
 EVENT_REQUIRED_MESSAGE = (
@@ -30,6 +31,7 @@ def register_task_command(
     openai_client: Any,
     notion: Any,
     notion_db_id: str | None,
+    fanfic_database_id: str | None,
     get_database_schema_config: Callable[[str], tuple[str, dict[str, set[str]]]],
     build_select_property: Callable[[str, str | None, dict[str, set[str]], list[str]], dict | None],
     notion_prop_schedule_date: str,
@@ -137,6 +139,7 @@ def register_task_command(
             print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
             resolved_notion_db_id = notion_db_id or os.getenv("NOTION_DATABASE_ID")
+            resolved_fanfic_database_id = fanfic_database_id or os.getenv("NOTION_FANFIC_DATABASE_ID")
             if not resolved_notion_db_id:
                 raise ValueError("NOTION_DATABASE_ID が設定されていません。")
 
@@ -145,6 +148,58 @@ def register_task_command(
 
             created_count = 0
             warning_messages = []
+            sync_messages = []
+
+            try:
+                work_title_sync_result = ensure_select_option(
+                    notion=notion,
+                    database_id=resolved_notion_db_id,
+                    property_name=notion_prop_work_title,
+                    option_name=プロジェクト名,
+                )
+                if work_title_sync_result == "added":
+                    sync_messages.append("SCHEDULE同期: 作品タイトル候補を追加しました。")
+            except Exception as schedule_work_title_error:
+                warning_messages.append(
+                    f"{notion_prop_work_title}: '{プロジェクト名}' の候補同期に失敗 ({schedule_work_title_error})"
+                )
+
+            try:
+                event_sync_result = ensure_select_option(
+                    notion=notion,
+                    database_id=resolved_notion_db_id,
+                    property_name=notion_prop_event,
+                    option_name=resolved_event_name,
+                )
+                if event_sync_result == "added":
+                    sync_messages.append("SCHEDULE同期: イベント候補を追加しました。")
+            except Exception as schedule_event_error:
+                warning_messages.append(
+                    f"{notion_prop_event}: '{resolved_event_name}' の候補同期に失敗 ({schedule_event_error})"
+                )
+
+            if resolved_fanfic_database_id:
+                try:
+                    fanfic_result, fanfic_title_property_name, fanfic_warnings = ensure_fanfic_page(
+                        notion=notion,
+                        database_id=resolved_fanfic_database_id,
+                        work_title=プロジェクト名,
+                        event_name=resolved_event_name,
+                        category_name=種類,
+                    )
+                    if fanfic_result == "created":
+                        sync_messages.append(
+                            f"FANFIC同期: 作品ページを作成しました。 (title: {fanfic_title_property_name})"
+                        )
+                    else:
+                        sync_messages.append(
+                            f"FANFIC同期: 既に同名作品があります。 (title: {fanfic_title_property_name})"
+                        )
+                    warning_messages.extend(fanfic_warnings)
+                except Exception as fanfic_error:
+                    warning_messages.append(f"FANFIC同期に失敗: {fanfic_error}")
+            else:
+                sync_messages.append("FANFIC同期: NOTION_FANFIC_DATABASE_ID 未設定のためスキップしました。")
 
             for task in tasks_list:
                 try:
@@ -152,7 +207,7 @@ def register_task_command(
 
                     properties = {
                         title_property_name: {
-                            "title": [{"text": {"content": f"{プロジェクト名} / {task['task_name']}"}}]
+                            "title": [{"text": {"content": task["task_name"]}}]
                         },
                         notion_prop_schedule_date: {
                             "date": {"start": task["deadline"]}
@@ -169,7 +224,7 @@ def register_task_command(
                         properties[notion_prop_category] = category_prop
 
                     work_title_prop = build_select_property(
-                        notion_prop_work_title, task.get("task_name"), select_options, warning_messages
+                        notion_prop_work_title, プロジェクト名, select_options, warning_messages
                     )
                     if work_title_prop:
                         properties[notion_prop_work_title] = work_title_prop
@@ -219,6 +274,13 @@ def register_task_command(
                 value=task_text[:1024],
                 inline=False
             )
+
+            if sync_messages:
+                embed.add_field(
+                    name="🔗 同期結果",
+                    value="\n".join(f"- {message}" for message in sync_messages)[:1024],
+                    inline=False,
+                )
 
             if created_count != len(tasks_list):
                 embed.add_field(

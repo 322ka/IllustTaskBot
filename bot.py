@@ -23,6 +23,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DB_ID = os.getenv("NOTION_DATABASE_ID")
 EVENT_DB_ID = os.getenv("NOTION_EVENT_DATABASE_ID")
+FANFIC_DB_ID = os.getenv("NOTION_FANFIC_DATABASE_ID")
 REPORT_CHANNEL_ID = int(os.getenv("REPORT_CHANNEL_ID", "0"))
 
 intents = discord.Intents.default()
@@ -106,6 +107,7 @@ register_task_command(
     openai_client=openai_client,
     notion=notion,
     notion_db_id=NOTION_DB_ID,
+    fanfic_database_id=FANFIC_DB_ID,
     get_database_schema_config=get_database_schema_config,
     build_select_property=build_select_property,
     notion_prop_schedule_date=NOTION_PROP_SCHEDULE_DATE,
