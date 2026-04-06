@@ -8,6 +8,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.commands.task import WORK_CATEGORY_CHOICES, WORK_TYPE_CHOICES
+from src.services.google_calendar_service import list_events
 from src.services.estimate_runtime_ai_service import request_estimate_adjustment
 from src.services.estimate_runtime_service import (
     ESTIMATE_EVENT_REQUIRED_MESSAGE,
@@ -21,6 +22,91 @@ DIFFICULTY_CHOICES = [
     app_commands.Choice(name="\u4e2d", value="\u4e2d"),
     app_commands.Choice(name="\u9ad8", value="\u9ad8"),
 ]
+
+
+def _looks_english(text: str) -> bool:
+    ascii_letters = sum(1 for ch in text if ("a" <= ch.lower() <= "z"))
+    return ascii_letters >= max(8, len(text) // 4)
+
+
+def _normalize_ai_commentary(text: str, fallback: str) -> str:
+    if not text or _looks_english(text):
+        return fallback
+    return text
+
+
+def _normalize_ai_buffer_comment(text: str) -> str:
+    if not text or _looks_english(text):
+        return "\u4f59\u88d5\u3092\u78ba\u4fdd\u3059\u308b\u524d\u63d0\u3067\u88dc\u6b63\u3057\u305f\u898b\u7a4d\u3067\u3059\u3002"
+    return text
+
+
+def _normalize_ai_schedule_lines(lines: list[str], fallback: list[str]) -> list[str]:
+    if not lines:
+        return fallback
+    english_like_count = sum(1 for line in lines if _looks_english(line))
+    if english_like_count >= max(1, len(lines) // 2):
+        return fallback
+    return lines
+
+
+def _localize_ai_failure_reason(reason: str) -> str:
+    mapping = {
+        "OpenAI client is not configured.": "OpenAI client \u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002",
+        "AI response was empty.": "AI \u306e\u5fdc\u7b54\u304c\u7a7a\u3067\u3057\u305f\u3002",
+        "adjusted_steps shape is invalid.": "adjusted_steps \u306e\u5f62\u5f0f\u304c\u4e0d\u6b63\u3067\u3059\u3002",
+        "schedule_plan shape is invalid.": "schedule_plan \u306e\u5f62\u5f0f\u304c\u4e0d\u6b63\u3067\u3059\u3002",
+        "commentary fields are invalid.": "AI \u88dc\u8db3\u6587\u306e\u5f62\u5f0f\u304c\u4e0d\u6b63\u3067\u3059\u3002",
+        "step data shape is invalid.": "\u5de5\u7a0b\u30c7\u30fc\u30bf\u306e\u5f62\u5f0f\u304c\u4e0d\u6b63\u3067\u3059\u3002",
+        "schedule_plan is empty.": "schedule_plan \u304c\u7a7a\u3067\u3057\u305f\u3002",
+    }
+    return mapping.get(reason, reason)
+
+
+def _build_calendar_note(
+    *,
+    due_date: datetime.date,
+) -> tuple[str | None, str | None]:
+    today = datetime.now().date()
+    if due_date < today:
+        return None, None
+
+    events, error = list_events(
+        calendar_id="primary",
+        time_min=datetime.combine(today, datetime.min.time()),
+        time_max=datetime.combine(due_date, datetime.max.time()),
+        max_results=50,
+    )
+    if error:
+        print(f"estimate.calendar skipped: {error}")
+        return None, error
+
+    all_day_dates: list[str] = []
+    timed_dates: list[str] = []
+    for event in events:
+        date_label = event.start.split("T")[0]
+        if event.is_all_day:
+            all_day_dates.append(date_label)
+        else:
+            timed_dates.append(date_label)
+
+    unique_all_day = sorted(set(all_day_dates))
+    unique_timed = sorted(set(timed_dates))
+    if not unique_all_day and not unique_timed:
+        return "\u671f\u9593\u4e2d\u306e\u5927\u304d\u306a\u4e88\u5b9a\u306f\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3067\u3057\u305f\u3002", None
+
+    note_parts: list[str] = []
+    if unique_all_day:
+        days = ", ".join(unique_all_day[:5])
+        note_parts.append(
+            f"\u7d42\u65e5\u4e88\u5b9a\u304c {len(unique_all_day)} \u65e5\u3042\u308a\u307e\u3059\uff08{days}\uff09"
+        )
+    if unique_timed:
+        days = ", ".join(unique_timed[:5])
+        note_parts.append(
+            f"\u6642\u523b\u4ed8\u304d\u4e88\u5b9a\u304c {len(unique_timed)} \u65e5\u3042\u308a\u307e\u3059\uff08{days}\uff09"
+        )
+    return "\u3002".join(note_parts) + "\u3002", None
 
 
 def build_estimate_embed(
@@ -37,6 +123,7 @@ def build_estimate_embed(
     schedule_lines: list[str],
     using_ai: bool,
     ai_note: str | None,
+    calendar_note: str | None,
 ) -> discord.Embed:
     embed = discord.Embed(
         title="\u898b\u7a4d\u7d50\u679c\uff08AI\u88dc\u6b63\u7248\uff09" if using_ai else "\u898b\u7a4d\u7d50\u679c\uff08\u7c21\u6613\u898b\u7a4d\uff09",
@@ -57,6 +144,8 @@ def build_estimate_embed(
         value="\n".join(f"- {line}" for line in schedule_lines)[:1024],
         inline=False,
     )
+    if calendar_note:
+        embed.add_field(name="\u4e88\u5b9a\u8003\u616e", value=calendar_note[:1024], inline=False)
     if using_ai and ai_note:
         embed.add_field(name="AI\u88dc\u8db3", value=ai_note[:1024], inline=False)
     if not using_ai:
@@ -125,11 +214,17 @@ def register_estimate_command(bot: commands.Bot, openai_client: Any | None = Non
             )
 
             ai_note: str | None = None
+            calendar_note: str | None = None
             using_ai = False
             steps = simple_result.steps
             total_hours = simple_result.total_hours
             commentary = simple_result.commentary
             schedule_lines = simple_result.schedule_lines
+
+            stage = "calendar_context"
+            calendar_note, calendar_error = _build_calendar_note(due_date=parsed_due_date)
+            if calendar_error:
+                calendar_note = None
 
             stage = "ai_adjustment"
             ai_outcome = request_estimate_adjustment(
@@ -147,13 +242,19 @@ def register_estimate_command(bot: commands.Bot, openai_client: Any | None = Non
                 using_ai = True
                 steps = ai_outcome.result.adjusted_steps
                 total_hours = ai_outcome.result.total_hours
-                commentary = ai_outcome.result.commentary
-                schedule_lines = ai_outcome.result.schedule_plan
-                ai_note = ai_outcome.result.buffer_comment
+                commentary = _normalize_ai_commentary(
+                    ai_outcome.result.commentary,
+                    simple_result.commentary,
+                )
+                schedule_lines = _normalize_ai_schedule_lines(
+                    ai_outcome.result.schedule_plan,
+                    simple_result.schedule_lines,
+                )
+                ai_note = _normalize_ai_buffer_comment(ai_outcome.result.buffer_comment)
             elif ai_outcome.failure_reason:
                 ai_note = (
                     "AI\u88dc\u6b63\u306f\u4f7f\u3048\u307e\u305b\u3093\u3067\u3057\u305f: "
-                    f"{ai_outcome.failure_reason}"
+                    f"{_localize_ai_failure_reason(ai_outcome.failure_reason)}"
                 )
 
             stage = "display"
@@ -174,6 +275,7 @@ def register_estimate_command(bot: commands.Bot, openai_client: Any | None = Non
                 schedule_lines=schedule_lines,
                 using_ai=using_ai,
                 ai_note=ai_note,
+                calendar_note=calendar_note,
             )
             await interaction.followup.send(embed=embed)
         except ValueError:
