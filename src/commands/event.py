@@ -1,4 +1,5 @@
 import os
+import traceback
 
 import discord
 from discord.ext import commands
@@ -6,7 +7,7 @@ from discord.ext import commands
 from src.services.db_service import get_current_event, set_current_event
 from src.services.notion_service import (
     EVENT_PROPERTY_NAME,
-    ensure_event_page,
+    ensure_event_page_with_details,
     ensure_select_option,
 )
 
@@ -37,15 +38,15 @@ def register_event_command(
                 notice_lines = [f"現在のイベントはすでに「{saved_event}」です。"]
             else:
                 notice_lines = [f"現在のイベントを「{saved_event}」に設定しました。"]
+
             resolved_notion_db_id = notion_db_id or os.getenv("NOTION_DATABASE_ID")
-            resolved_event_database_id = (
-                event_database_id
-                or os.getenv("NOTION_EVENT_DATABASE_ID")
-                or os.getenv("EVENT_DATABASE_ID")
-            )
+            resolved_event_database_id = event_database_id or os.getenv("NOTION_EVENT_DATABASE_ID")
 
             if not resolved_notion_db_id:
-                notice_lines.append("⚠️ Notion DB ID が未設定のため、Notion 候補同期はスキップしました。")
+                notice_lines.append(
+                    "⚠️ SCHEDULE同期: NOTION_DATABASE_ID が未設定のため、"
+                    "イベント候補同期はスキップしました。"
+                )
             else:
                 try:
                     sync_result = ensure_select_option(
@@ -55,32 +56,43 @@ def register_event_command(
                         option_name=event_name,
                     )
                     if sync_result == "added":
-                        notice_lines.append("Notion のイベント候補にも追加しました。")
+                        notice_lines.append("SCHEDULE同期: イベント候補を追加しました。")
                     else:
-                        notice_lines.append("Notion のイベント候補には既に存在しています。")
+                        notice_lines.append("SCHEDULE同期: イベント候補は既に存在しています。")
                 except Exception as notion_error:
+                    traceback.print_exc()
                     notice_lines.append(
-                        f"⚠️ current_event の保存は成功しましたが、Notion候補追加は失敗しました: {str(notion_error)}"
+                        "⚠️ SCHEDULE同期に失敗しました: "
+                        f"{type(notion_error).__name__}: {str(notion_error)}"
                     )
 
             if resolved_event_database_id:
                 try:
-                    page_result = ensure_event_page(
+                    page_result, title_property_name = ensure_event_page_with_details(
                         notion=notion,
                         database_id=resolved_event_database_id,
                         event_name=event_name,
                     )
                     if page_result == "created":
-                        notice_lines.append("EVENT 一覧DBにも新規ページを作成しました。")
+                        notice_lines.append(
+                            "EVENT DB同期: 新規ページを作成しました。"
+                            f" (title: {title_property_name})"
+                        )
                     else:
-                        notice_lines.append("EVENT 一覧DBには既に同名イベントがあります。")
+                        notice_lines.append(
+                            "EVENT DB同期: 既に同名イベントがあります。"
+                            f" (title: {title_property_name})"
+                        )
                 except Exception as event_db_error:
+                    traceback.print_exc()
                     notice_lines.append(
-                        f"⚠️ current_event の保存は成功しましたが、EVENT 一覧DBへの反映は失敗しました: {str(event_db_error)}"
+                        "⚠️ EVENT DB同期に失敗しました: "
+                        f"{type(event_db_error).__name__}: {str(event_db_error)}"
                     )
             else:
                 notice_lines.append(
-                    "ℹ️ NOTION_EVENT_DATABASE_ID が未設定のため、EVENT DB へのページ作成はスキップしました。"
+                    "⚠️ EVENT DB同期: NOTION_EVENT_DATABASE_ID が未設定のため、"
+                    "EVENT DB へのページ作成をスキップしました。"
                 )
 
             await interaction.followup.send(

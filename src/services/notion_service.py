@@ -136,3 +136,35 @@ def ensure_event_page(
         },
     )
     return "created"
+
+
+def ensure_event_page_with_details(
+    notion: Any,
+    database_id: str,
+    event_name: str,
+) -> tuple[str, str]:
+    title_property_name = get_title_property_name(notion, database_id)
+    existing_page = find_page_by_title(
+        notion=notion,
+        database_id=database_id,
+        title_property_name=title_property_name,
+        page_title=event_name,
+    )
+    if existing_page:
+        return "exists", title_property_name
+
+    notion.pages.create(
+        parent={"database_id": database_id},
+        properties={
+            title_property_name: {
+                "title": [
+                    {
+                        "text": {
+                            "content": event_name,
+                        }
+                    }
+                ]
+            }
+        },
+    )
+    return "created", title_property_name
