@@ -33,6 +33,13 @@ def _load_estimate_prompt() -> str:
     return ESTIMATE_PROMPT_PATH.read_text(encoding="utf-8")
 
 
+def _render_prompt(template: str, values: dict[str, str]) -> str:
+    rendered = template
+    for key, value in values.items():
+        rendered = rendered.replace(f"{{{key}}}", value)
+    return rendered
+
+
 def _strip_code_fences(text: str) -> str:
     if "```json" in text:
         return text.split("```json", 1)[1].split("```", 1)[0].strip()
@@ -61,14 +68,17 @@ def request_estimate_adjustment(
             failure_reason="OpenAI client is not configured.",
         )
 
-    prompt = _load_estimate_prompt().format(
-        event_name=event_name,
-        work_title=work_title,
-        work_category=work_category,
-        work_type=work_type,
-        difficulty=difficulty or "unspecified",
-        due_date=due_date,
-        template_steps_json=json.dumps(template_steps, ensure_ascii=False, indent=2),
+    prompt = _render_prompt(
+        _load_estimate_prompt(),
+        {
+            "event_name": event_name,
+            "work_title": work_title,
+            "work_category": work_category,
+            "work_type": work_type,
+            "difficulty": difficulty or "unspecified",
+            "due_date": due_date,
+            "template_steps_json": json.dumps(template_steps, ensure_ascii=False, indent=2),
+        },
     )
 
     try:
