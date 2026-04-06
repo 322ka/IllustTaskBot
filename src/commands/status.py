@@ -7,7 +7,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.services.db_service import get_current_event
-from src.services.log_service import send_log
+from src.services.log_runtime_service import send_log
 from src.services.progress_service import build_work_progress_summaries
 
 

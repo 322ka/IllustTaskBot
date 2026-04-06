@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import traceback
 from typing import Any
@@ -17,7 +18,7 @@ from src.services.db_service import (
 )
 from src.services.progress_service import save_estimate_snapshot
 from src.services.google_calendar_service import list_events, summarize_events
-from src.services.log_service import send_log
+from src.services.log_runtime_service import send_log
 from src.services.estimate_runtime_ai_service import request_estimate_adjustment
 from src.services.estimate_runtime_service import (
     ESTIMATE_EVENT_REQUIRED_MESSAGE,
@@ -204,6 +205,23 @@ def _format_notion_link(url: str) -> str:
     return f"<{url}>"
 
 
+async def _safe_send_ephemeral(interaction: discord.Interaction, message: str) -> None:
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except Exception as exc:
+        print(f"estimate->task response failed: {type(exc).__name__}: {exc}")
+
+
+async def _safe_refresh_view(interaction: discord.Interaction, view: discord.ui.View) -> None:
+    try:
+        await interaction.edit_original_response(view=view)
+    except Exception as exc:
+        print(f"estimate->task view refresh failed: {type(exc).__name__}: {exc}")
+
+
 def build_estimate_embed(
     *,
     event_name: str,
@@ -276,70 +294,52 @@ class EstimateTaskActionView(discord.ui.View):
     @discord.ui.button(label="この内容でタスク作成", style=discord.ButtonStyle.green)
     async def create_task_from_estimate(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if str(interaction.user.id) != self.owner_user_id:
-            await interaction.response.send_message("このボタンは見積を作成した本人のみ使えます。", ephemeral=True)
+            await _safe_send_ephemeral(interaction, "このボタンは見積を作成した本人のみ使えます。")
             return
 
         if self.is_processing:
-            await interaction.response.send_message("いま task 化を実行中です。少し待ってから結果を確認してください。", ephemeral=True)
+            await _safe_send_ephemeral(interaction, "いま task 化を実行中です。少し待ってから結果を確認してください。")
             return
 
         if self.is_processed:
-            await interaction.response.send_message("この見積からの task 化はすでに処理済みです。", ephemeral=True)
+            await _safe_send_ephemeral(interaction, "この見積からの task 化はすでに処理済みです。")
             return
 
         self.is_processing = True
         button.disabled = True
-        await interaction.response.defer(ephemeral=True)
-        if interaction.message:
-            try:
-                await interaction.message.edit(view=self)
-            except Exception as exc:
-                print(f"estimate->task button disable failed: {type(exc).__name__}: {exc}")
+        try:
+            await interaction.response.edit_message(view=self)
+        except Exception as exc:
+            print(f"estimate->task button disable failed: {type(exc).__name__}: {exc}")
 
         record = get_latest_estimate(self.owner_user_id)
         if record is None:
             self.is_processing = False
             button.disabled = False
-            if interaction.message:
-                try:
-                    await interaction.message.edit(view=self)
-                except Exception:
-                    pass
-            await interaction.followup.send("task 化できる見積が見つかりませんでした。もう一度 /estimate を実行してください。", ephemeral=True)
+            await _safe_refresh_view(interaction, self)
+            await _safe_send_ephemeral(interaction, "task 化できる見積が見つかりませんでした。もう一度 /estimate を実行してください。")
             return
 
         if record.estimate_created_at != self.estimate_created_at:
             self.is_processing = False
             button.disabled = False
-            if interaction.message:
-                try:
-                    await interaction.message.edit(view=self)
-                except Exception:
-                    pass
-            await interaction.followup.send("より新しい見積があります。最新の見積結果から task 化してください。", ephemeral=True)
+            await _safe_refresh_view(interaction, self)
+            await _safe_send_ephemeral(interaction, "より新しい見積があります。最新の見積結果から task 化してください。")
             return
 
         created_at = datetime.fromisoformat(record.estimate_created_at)
         if (datetime.now(timezone.utc) - created_at).total_seconds() > ESTIMATE_EXPIRY_SECONDS:
             self.is_processing = False
             button.disabled = False
-            if interaction.message:
-                try:
-                    await interaction.message.edit(view=self)
-                except Exception:
-                    pass
-            await interaction.followup.send("この見積結果は古くなったため失効しました。もう一度 /estimate を実行してください。", ephemeral=True)
+            await _safe_refresh_view(interaction, self)
+            await _safe_send_ephemeral(interaction, "この見積結果は古くなったため失効しました。もう一度 /estimate を実行してください。")
             return
 
         if record.task_created_at:
             self.is_processing = False
             self.is_processed = True
-            if interaction.message:
-                try:
-                    await interaction.message.edit(view=self)
-                except Exception:
-                    pass
-            await interaction.followup.send("この見積からの task 化はすでに処理済みです。", ephemeral=True)
+            await _safe_refresh_view(interaction, self)
+            await _safe_send_ephemeral(interaction, "この見積からの task 化はすでに処理済みです。")
             return
 
         notion_db_id = self.task_runtime_options.get("notion_db_id")
@@ -347,23 +347,21 @@ class EstimateTaskActionView(discord.ui.View):
         if not notion_db_id or notion is None:
             self.is_processing = False
             button.disabled = False
-            if interaction.message:
-                try:
-                    await interaction.message.edit(view=self)
-                except Exception:
-                    pass
-            await interaction.followup.send("task 化に必要な Notion 設定が不足しています。", ephemeral=True)
+            await _safe_refresh_view(interaction, self)
+            await _safe_send_ephemeral(interaction, "task 化に必要な Notion 設定が不足しています。")
             return
 
         try:
-            tasks_list = generate_task_plan(
+            tasks_list = await asyncio.to_thread(
+                generate_task_plan,
                 openai_client=self.openai_client,
                 work_title=record.work_title,
                 due_date=record.due_date,
                 work_category=record.work_category,
                 work_type=record.work_type,
             )
-            result = execute_task_registration(
+            result = await asyncio.to_thread(
+                execute_task_registration,
                 notion=notion,
                 notion_db_id=notion_db_id,
                 event_database_id=self.task_runtime_options.get("event_database_id"),
@@ -385,20 +383,15 @@ class EstimateTaskActionView(discord.ui.View):
         except Exception as exc:
             self.is_processing = False
             button.disabled = False
-            if interaction.message:
-                try:
-                    await interaction.message.edit(view=self)
-                except Exception:
-                    pass
-            await interaction.followup.send(f"task 化に失敗しました: {exc}", ephemeral=True)
+            await _safe_refresh_view(interaction, self)
+            await _safe_send_ephemeral(interaction, f"task 化に失敗しました: {exc}")
             return
 
         try:
             self.is_processed = True
             self.is_processing = False
-            mark_latest_estimate_task_created(self.owner_user_id)
-            if interaction.message:
-                await interaction.message.edit(view=self)
+            await asyncio.to_thread(mark_latest_estimate_task_created, self.owner_user_id)
+            await _safe_refresh_view(interaction, self)
 
             fanfic_status_message = "FANFIC: 未処理です。"
             if self.task_runtime_options.get("fanfic_database_id"):
@@ -444,10 +437,7 @@ class EstimateTaskActionView(discord.ui.View):
             else:
                 result_lines.append("エラー: なし")
 
-            await interaction.followup.send(
-                "\n".join(result_lines),
-                ephemeral=True,
-            )
+            await _safe_send_ephemeral(interaction, "\n".join(result_lines))
             await send_log(
                 self.bot,
                 content=(
@@ -459,10 +449,7 @@ class EstimateTaskActionView(discord.ui.View):
             self.is_processing = False
             print(f"estimate->task post process failed: {type(exc).__name__}: {exc}")
             traceback.print_exc()
-            await interaction.followup.send(
-                f"task 化は実行されましたが、結果表示の更新でエラーが発生しました: {exc}",
-                ephemeral=True,
-            )
+            await _safe_send_ephemeral(interaction, f"task 化は実行されましたが、結果表示の更新でエラーが発生しました: {exc}")
 
 
 
@@ -547,7 +534,8 @@ def register_estimate_command(
                 )
 
             stage = "ai_adjustment"
-            ai_outcome = request_estimate_adjustment(
+            ai_outcome = await asyncio.to_thread(
+                request_estimate_adjustment,
                 openai_client=openai_client,
                 event_name=resolved_event_name,
                 work_title=work_title,

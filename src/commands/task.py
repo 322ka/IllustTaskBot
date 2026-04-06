@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime
 from typing import Any, Callable
@@ -9,7 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.services.db_service import get_current_event
-from src.services.log_service import send_log
+from src.services.log_runtime_service import send_log
 from src.services.task_runtime_service import execute_task_registration, generate_task_plan
 
 
@@ -101,14 +102,16 @@ def register_task_command(
             return
 
         try:
-            tasks_list = generate_task_plan(
+            tasks_list = await asyncio.to_thread(
+                generate_task_plan,
                 openai_client=openai_client,
                 work_title=作品名,
                 due_date=締切日,
                 work_category=作業種別.value,
                 work_type=作品種別.value,
             )
-            result = execute_task_registration(
+            result = await asyncio.to_thread(
+                execute_task_registration,
                 notion=notion,
                 notion_db_id=resolved_notion_db_id,
                 event_database_id=resolved_event_database_id,
