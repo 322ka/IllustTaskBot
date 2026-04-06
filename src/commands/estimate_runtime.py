@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
@@ -18,9 +18,9 @@ from src.services.estimate_runtime_service import (
 
 
 DIFFICULTY_CHOICES = [
-    app_commands.Choice(name="\u4f4e", value="\u4f4e"),
-    app_commands.Choice(name="\u4e2d", value="\u4e2d"),
-    app_commands.Choice(name="\u9ad8", value="\u9ad8"),
+    app_commands.Choice(name="低", value="低"),
+    app_commands.Choice(name="中", value="中"),
+    app_commands.Choice(name="高", value="高"),
 ]
 
 
@@ -37,7 +37,7 @@ def _normalize_ai_commentary(text: str, fallback: str) -> str:
 
 def _normalize_ai_buffer_comment(text: str) -> str:
     if not text or _looks_english(text):
-        return "\u4f59\u88d5\u3092\u78ba\u4fdd\u3059\u308b\u524d\u63d0\u3067\u88dc\u6b63\u3057\u305f\u898b\u7a4d\u3067\u3059\u3002"
+        return "余裕を確保する前提で補正した見積です。"
     return text
 
 
@@ -52,13 +52,13 @@ def _normalize_ai_schedule_lines(lines: list[str], fallback: list[str]) -> list[
 
 def _localize_ai_failure_reason(reason: str) -> str:
     mapping = {
-        "OpenAI client is not configured.": "OpenAI client \u304c\u672a\u8a2d\u5b9a\u3067\u3059\u3002",
-        "AI response was empty.": "AI \u306e\u5fdc\u7b54\u304c\u7a7a\u3067\u3057\u305f\u3002",
-        "adjusted_steps shape is invalid.": "adjusted_steps \u306e\u5f62\u5f0f\u304c\u4e0d\u6b63\u3067\u3059\u3002",
-        "schedule_plan shape is invalid.": "schedule_plan \u306e\u5f62\u5f0f\u304c\u4e0d\u6b63\u3067\u3059\u3002",
-        "commentary fields are invalid.": "AI \u88dc\u8db3\u6587\u306e\u5f62\u5f0f\u304c\u4e0d\u6b63\u3067\u3059\u3002",
-        "step data shape is invalid.": "\u5de5\u7a0b\u30c7\u30fc\u30bf\u306e\u5f62\u5f0f\u304c\u4e0d\u6b63\u3067\u3059\u3002",
-        "schedule_plan is empty.": "schedule_plan \u304c\u7a7a\u3067\u3057\u305f\u3002",
+        "OpenAI client is not configured.": "OpenAI client が未設定です。",
+        "AI response was empty.": "AI の応答が空でした。",
+        "adjusted_steps shape is invalid.": "adjusted_steps の形式が不正です。",
+        "schedule_plan shape is invalid.": "schedule_plan の形式が不正です。",
+        "commentary fields are invalid.": "AI 補足文の形式が不正です。",
+        "step data shape is invalid.": "工程データの形式が不正です。",
+        "schedule_plan is empty.": "schedule_plan が空でした。",
     }
     return mapping.get(reason, reason)
 
@@ -126,13 +126,33 @@ def _apply_calendar_pressure_to_commentary(
     return adjusted_commentary
 
 
+def _build_ai_calendar_context(calendar_summary: Any | None) -> dict[str, Any]:
+    if calendar_summary is None:
+        return {
+            "all_day_count": 0,
+            "semi_all_day_count": 0,
+            "light_count": 0,
+            "all_day_dates": [],
+            "semi_all_day_dates": [],
+            "light_dates": [],
+        }
+    return {
+        "all_day_count": calendar_summary.all_day_count,
+        "semi_all_day_count": calendar_summary.semi_all_day_count,
+        "light_count": calendar_summary.light_count,
+        "all_day_dates": calendar_summary.all_day_dates[:5],
+        "semi_all_day_dates": calendar_summary.semi_all_day_dates[:5],
+        "light_dates": calendar_summary.light_dates[:5],
+    }
+
+
 def _build_calendar_note(
     *,
     due_date: datetime.date,
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, str | None, Any | None]:
     today = datetime.now().date()
     if due_date < today:
-        return None, None
+        return None, None, None
 
     events, error = list_events(
         calendar_id=None,
@@ -142,7 +162,7 @@ def _build_calendar_note(
     )
     if error:
         print(f"estimate.calendar skipped: {error}")
-        return None, error
+        return None, error, None
 
     summary = summarize_events(events)
     if (
@@ -150,25 +170,19 @@ def _build_calendar_note(
         and summary.semi_all_day_count == 0
         and summary.light_count == 0
     ):
-        return "\u671f\u9593\u4e2d\u306e\u5927\u304d\u306a\u4e88\u5b9a\u306f\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3067\u3057\u305f\u3002", None
+        return "期間中の大きな予定は見つかりませんでした。", None, summary
 
     note_parts: list[str] = []
     if summary.all_day_count:
         days = _preview_dates(summary.all_day_dates)
-        note_parts.append(
-            f"\u7d42\u65e5\u4e88\u5b9a: {summary.all_day_count}\u65e5\uff08{days}\uff09"
-        )
+        note_parts.append(f"終日予定: {summary.all_day_count}日（{days}）")
     if summary.semi_all_day_count:
         days = _preview_dates(summary.semi_all_day_dates)
-        note_parts.append(
-            f"\u6e96\u7d42\u65e5\u4e88\u5b9a: {summary.semi_all_day_count}\u65e5\uff08{days}\uff09"
-        )
+        note_parts.append(f"準終日予定: {summary.semi_all_day_count}日（{days}）")
     if summary.light_count:
         days = _preview_dates(summary.light_dates)
-        note_parts.append(
-            f"\u8efd\u3044\u4e88\u5b9a\u3042\u308a: {summary.light_count}\u65e5\uff08{days}\uff09"
-        )
-    return "\u3002".join(note_parts) + "\u3002", None
+        note_parts.append(f"軽い予定あり: {summary.light_count}日（{days}）")
+    return "。".join(note_parts) + "。", None, summary
 
 
 def build_estimate_embed(
@@ -188,56 +202,56 @@ def build_estimate_embed(
     calendar_note: str | None,
 ) -> discord.Embed:
     embed = discord.Embed(
-        title="\u898b\u7a4d\u7d50\u679c\uff08AI\u88dc\u6b63\u7248\uff09" if using_ai else "\u898b\u7a4d\u7d50\u679c\uff08\u7c21\u6613\u898b\u7a4d\uff09",
-        description=f"**{work_title}** \u306e\u898b\u7a4d\u3068\u30b9\u30b1\u30b8\u30e5\u30fc\u30eb\u6848\u3067\u3059\u3002",
+        title="見積結果（AI補正版）" if using_ai else "見積結果（簡易見積）",
+        description=f"**{work_title}** の見積とスケジュール案です。",
         color=discord.Color.blue(),
     )
-    embed.add_field(name="\u30a4\u30d9\u30f3\u30c8\u540d", value=event_name, inline=False)
-    embed.add_field(name="\u4f5c\u54c1\u540d", value=work_title, inline=False)
-    embed.add_field(name="\u4f5c\u696d\u7a2e\u5225", value=work_category, inline=True)
-    embed.add_field(name="\u4f5c\u54c1\u7a2e\u5225", value=work_type, inline=True)
-    embed.add_field(name="\u96e3\u6613\u5ea6", value=difficulty or "\u672a\u6307\u5b9a", inline=True)
-    embed.add_field(name="\u5de5\u7a0b\u4e00\u89a7", value=step_lines[:1024], inline=False)
-    embed.add_field(name="\u5408\u8a08\u6642\u9593", value=f"{total_hours:.1f}\u6642\u9593", inline=True)
-    embed.add_field(name="\u7de0\u5207\u307e\u3067", value=f"{days_until_due}\u65e5", inline=True)
-    embed.add_field(name="\u6240\u611f", value=commentary[:1024], inline=False)
+    embed.add_field(name="イベント名", value=event_name, inline=False)
+    embed.add_field(name="作品名", value=work_title, inline=False)
+    embed.add_field(name="作業種別", value=work_category, inline=True)
+    embed.add_field(name="作品種別", value=work_type, inline=True)
+    embed.add_field(name="難易度", value=difficulty or "未指定", inline=True)
+    embed.add_field(name="工程一覧", value=step_lines[:1024], inline=False)
+    embed.add_field(name="合計時間", value=f"{total_hours:.1f}時間", inline=True)
+    embed.add_field(name="締切まで", value=f"{days_until_due}日", inline=True)
+    embed.add_field(name="所感", value=commentary[:1024], inline=False)
     embed.add_field(
-        name="\u7c21\u6613\u30b9\u30b1\u30b8\u30e5\u30fc\u30eb\u6848",
+        name="簡易スケジュール案",
         value="\n".join(f"- {line}" for line in schedule_lines)[:1024],
         inline=False,
     )
     if calendar_note:
-        embed.add_field(name="\u4e88\u5b9a\u8003\u616e", value=calendar_note[:1024], inline=False)
+        embed.add_field(name="予定考慮", value=calendar_note[:1024], inline=False)
     if using_ai and ai_note:
-        embed.add_field(name="AI\u88dc\u8db3", value=ai_note[:1024], inline=False)
+        embed.add_field(name="AI補足", value=ai_note[:1024], inline=False)
     if not using_ai:
         fallback_text = (
-            "AI\u88dc\u6b63\u304c\u4f7f\u3048\u306a\u304b\u3063\u305f\u305f\u3081\u3001"
-            "\u7c21\u6613\u898b\u7a4d\u3092\u8868\u793a\u3057\u3066\u3044\u307e\u3059\u3002"
+            "AI補正が使えなかったため、"
+            "簡易見積を表示しています。"
         )
         if ai_note:
             fallback_text = f"{fallback_text}\n{ai_note}"
-        embed.add_field(name="\u8868\u793a\u30e2\u30fc\u30c9", value=fallback_text[:1024], inline=False)
+        embed.add_field(name="表示モード", value=fallback_text[:1024], inline=False)
     return embed
 
 
 def register_estimate_command(bot: commands.Bot, openai_client: Any | None = None) -> None:
-    @bot.tree.command(name="estimate", description="\u4f5c\u54c1\u306e\u898b\u7a4d\u3068\u7c21\u6613\u30b9\u30b1\u30b8\u30e5\u30fc\u30eb\u6848\u3092\u78ba\u8a8d")
+    @bot.tree.command(name="estimate", description="作品の見積と簡易スケジュール案を確認")
     @app_commands.rename(
-        work_title="\u4f5c\u54c1\u540d",
-        due_date="\u7de0\u5207\u65e5",
-        work_category="\u4f5c\u696d\u7a2e\u5225",
-        work_type="\u4f5c\u54c1\u7a2e\u5225",
-        difficulty="\u96e3\u6613\u5ea6",
-        event_name="\u30a4\u30d9\u30f3\u30c8\u540d",
+        work_title="作品名",
+        due_date="締切日",
+        work_category="作業種別",
+        work_type="作品種別",
+        difficulty="難易度",
+        event_name="イベント名",
     )
     @app_commands.describe(
-        work_title="\u4f5c\u54c1\u540d\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044",
-        due_date="\u7de0\u5207\u65e5\u3092 YYYY-MM-DD \u5f62\u5f0f\u3067\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044",
-        work_category="SCHEDULE DB \u306e\u30ab\u30c6\u30b4\u30ea\u306b\u5bfe\u5fdc\u3059\u308b\u4f5c\u696d\u7a2e\u5225\u3067\u3059",
-        work_type="\u30c6\u30f3\u30d7\u30ec\u5de5\u7a0b\u3068 FANFIC DB \u306e\u5206\u985e\u30bf\u30b0\u306b\u5bfe\u5fdc\u3059\u308b\u4f5c\u54c1\u7a2e\u5225\u3067\u3059",
-        difficulty="\u4efb\u610f\u3067\u3059\u3002AI\u88dc\u6b63\u306e\u53c2\u8003\u306b\u3057\u307e\u3059",
-        event_name="\u672a\u5165\u529b\u306e\u5834\u5408\u306f /event \u3067\u8a2d\u5b9a\u3057\u305f current_event \u3092\u4f7f\u3044\u307e\u3059",
+        work_title="作品名を入力してください",
+        due_date="締切日を YYYY-MM-DD 形式で入力してください",
+        work_category="SCHEDULE DB のカテゴリに対応する作業種別です",
+        work_type="テンプレ工程と FANFIC DB の分類タグに対応する作品種別です",
+        difficulty="任意です。AI補正の参考にします",
+        event_name="未入力の場合は /event で設定した current_event を使います",
     )
     @app_commands.choices(
         work_category=WORK_CATEGORY_CHOICES,
@@ -285,24 +299,17 @@ def register_estimate_command(bot: commands.Bot, openai_client: Any | None = Non
             schedule_lines = simple_result.schedule_lines
 
             stage = "calendar_context"
-            calendar_note, calendar_error = _build_calendar_note(due_date=parsed_due_date)
+            calendar_note, calendar_error, calendar_summary = _build_calendar_note(due_date=parsed_due_date)
             if calendar_error:
                 calendar_note = None
-            elif calendar_note:
-                calendar_events, summary_error = list_events(
-                    calendar_id=None,
-                    time_min=datetime.combine(datetime.now().date(), datetime.min.time()),
-                    time_max=datetime.combine(parsed_due_date, datetime.max.time()),
-                    max_results=50,
+
+            if calendar_summary:
+                commentary = _apply_calendar_pressure_to_commentary(
+                    base_commentary=commentary,
+                    all_day_count=calendar_summary.all_day_count,
+                    semi_all_day_count=calendar_summary.semi_all_day_count,
+                    light_count=calendar_summary.light_count,
                 )
-                if not summary_error:
-                    calendar_summary = summarize_events(calendar_events)
-                    commentary = _apply_calendar_pressure_to_commentary(
-                        base_commentary=commentary,
-                        all_day_count=calendar_summary.all_day_count,
-                        semi_all_day_count=calendar_summary.semi_all_day_count,
-                        light_count=calendar_summary.light_count,
-                    )
 
             stage = "ai_adjustment"
             ai_outcome = request_estimate_adjustment(
@@ -314,6 +321,7 @@ def register_estimate_command(bot: commands.Bot, openai_client: Any | None = Non
                 difficulty=difficulty.value if difficulty else None,
                 due_date=parsed_due_date.isoformat(),
                 template_steps=simple_result.steps,
+                calendar_context=_build_ai_calendar_context(calendar_summary),
             )
 
             if ai_outcome.used_ai and ai_outcome.result:
@@ -331,7 +339,7 @@ def register_estimate_command(bot: commands.Bot, openai_client: Any | None = Non
                 ai_note = _normalize_ai_buffer_comment(ai_outcome.result.buffer_comment)
             elif ai_outcome.failure_reason:
                 ai_note = (
-                    "AI\u88dc\u6b63\u306f\u4f7f\u3048\u307e\u305b\u3093\u3067\u3057\u305f: "
+                    "AI補正は使えませんでした: "
                     f"{_localize_ai_failure_reason(ai_outcome.failure_reason)}"
                 )
 
@@ -367,17 +375,17 @@ def register_estimate_command(bot: commands.Bot, openai_client: Any | None = Non
         except ValueError:
             if stage == "date_parse":
                 await interaction.followup.send(
-                    "\u65e5\u4ed8\u5f62\u5f0f\u304c\u6b63\u3057\u304f\u3042\u308a\u307e\u305b\u3093\u3002"
-                    "\u5f62\u5f0f: YYYY-MM-DD\uff08\u4f8b: 2026-05-20\uff09"
+                    "日付形式が正しくありません。"
+                    "形式: YYYY-MM-DD（例: 2026-05-20）"
                 )
                 return
             print(f"estimate error at {stage}: ValueError")
             await interaction.followup.send(
-                "\u898b\u7a4d\u51e6\u7406\u4e2d\u306b\u5165\u529b\u5024\u306e\u89e3\u91c8\u3067\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002"
-                "\u5185\u5bb9\u3092\u78ba\u8a8d\u3057\u3066\u518d\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
+                "見積処理中に入力値の解釈でエラーが発生しました。"
+                "内容を確認して再実行してください。"
             )
         except Exception as exc:
             print(f"estimate error at {stage}: {type(exc).__name__}: {exc}")
             await interaction.followup.send(
-                f"\u898b\u7a4d\u51e6\u7406\u4e2d\u306b\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u5931\u6557\u6bb5\u968e: {stage}"
+                f"見積処理中にエラーが発生しました。失敗段階: {stage}"
             )

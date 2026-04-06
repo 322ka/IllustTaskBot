@@ -40,6 +40,22 @@ def _render_prompt(template: str, values: dict[str, str]) -> str:
     return rendered
 
 
+def _append_calendar_context(prompt: str, calendar_context: dict[str, Any] | None) -> str:
+    if not calendar_context:
+        return prompt
+
+    calendar_block = json.dumps(calendar_context, ensure_ascii=False, indent=2)
+    return (
+        f"{prompt}\n\n"
+        "Google Calendar context:\n"
+        f"{calendar_block}\n\n"
+        "Use this calendar context as supporting information for commentary and schedule naturalness.\n"
+        "Treat all-day and semi-all-day days as normal schedule pressure.\n"
+        "Do not weaken their importance because the calendar is shared.\n"
+        "The final output must still be valid JSON only, and commentary/buffer_comment/schedule_plan must be natural Japanese.\n"
+    )
+
+
 def _strip_code_fences(text: str) -> str:
     if "```json" in text:
         return text.split("```json", 1)[1].split("```", 1)[0].strip()
@@ -58,6 +74,7 @@ def request_estimate_adjustment(
     difficulty: str | None,
     due_date: str,
     template_steps: list[EstimateStep],
+    calendar_context: dict[str, Any] | None = None,
 ) -> AIEstimateOutcome:
     if openai_client is None:
         print("estimate.ai skipped: OpenAI client is not configured.")
@@ -78,8 +95,10 @@ def request_estimate_adjustment(
             "difficulty": difficulty or "unspecified",
             "due_date": due_date,
             "template_steps_json": json.dumps(template_steps, ensure_ascii=False, indent=2),
+            "calendar_context_json": json.dumps(calendar_context or {}, ensure_ascii=False, indent=2),
         },
     )
+    prompt = _append_calendar_context(prompt, calendar_context)
 
     try:
         response = openai_client.chat.completions.create(

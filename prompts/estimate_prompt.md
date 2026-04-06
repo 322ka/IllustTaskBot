@@ -1,7 +1,7 @@
-あなたはイラスト制作の見積補助アシスタントです。
-以下の簡易見積をもとに、難易度とバッファを考慮した現実的な補正見積を作ってください。
+﻿You are assisting with illustration production estimation.
+Use the template steps as the base estimate, then adjust them carefully.
 
-入力情報:
+Inputs:
 - event_name: {event_name}
 - work_title: {work_title}
 - work_category: {work_category}
@@ -9,29 +9,34 @@
 - difficulty: {difficulty}
 - due_date: {due_date}
 
-簡易見積テンプレ:
+Template steps:
 {template_steps_json}
 
-指示:
-- 各工程の hours を必要に応じて補正してください
-- adjusted_steps を返してください
-- total_hours を返してください
-- buffer_comment にはバッファの考え方を日本語で短く書いてください
-- commentary には全体所感を日本語で短く書いてください
-- schedule_plan は日付ごとの簡易案を 3 行から 8 行で返してください
-- 無理な計画ならその旨を日本語で明記してください
-- commentary、buffer_comment、schedule_plan は必ず日本語にしてください
-- JSON のみ返してください
-- 説明文、前置き、コードブロックは禁止です
+Google Calendar context:
+{calendar_context_json}
 
-出力形式:
+Rules:
+- Keep the same step structure, but you may adjust hours realistically.
+- Return `adjusted_steps`.
+- Return `total_hours`.
+- `buffer_comment` must be natural Japanese.
+- `commentary` must be natural Japanese.
+- `schedule_plan` must be a natural Japanese schedule suggestion with 3 to 8 lines.
+- Use the Google Calendar context as supporting information for commentary and schedule naturalness.
+- Treat all-day and semi-all-day days as normal schedule pressure.
+- Do not weaken their importance because the calendar is shared.
+- Do not output explanations outside JSON.
+- Do not use code fences.
+- Output must be valid JSON only.
+
+Output format:
 {
   "adjusted_steps": [
     {"step_name": "情報収集", "hours": 1.5}
   ],
   "total_hours": 18.5,
-  "buffer_comment": "修正対応を見込んで余裕を少し上乗せしました。",
-  "commentary": "ややタイトですが、前半でラフまで進められれば対応可能です。",
+  "buffer_comment": "修正対応も見込んで余裕を少し加えました。",
+  "commentary": "ややタイトですが、カレンダー上の予定も考慮すると前半でラフまで進めたいです。",
   "schedule_plan": [
     "2026-04-10 - 情報収集と構図",
     "2026-04-11 - ラフ",
