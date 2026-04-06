@@ -89,7 +89,13 @@ def register_task_command(
 各ステップは通常 1-2 日かかるものとします。
 複雑なプロジェクトは時間を多めに見積もってください。
 
-【出力形式】JSON配列のみ（説明文は不要）
+【重要な出力ルール】
+- JSON配列のみを返してください
+- 説明文・前置き・補足・コードブロックは禁止です
+- ```json や ``` で囲まないでください
+- 返答は配列の `[` から始めて `]` で終えてください
+
+【出力形式】JSON配列のみ
 [
   {{
     "step": 1,
@@ -108,13 +114,20 @@ def register_task_command(
             )
 
             response_text = response.choices[0].message.content
+            print(f"🧠 AI raw response repr: {response_text!r}")
+
+            if not response_text or not response_text.strip():
+                raise ValueError("AI の応答が空でした。")
 
             if "```json" in response_text:
                 response_text = response_text.split("```json")[1].split("```")[0]
             elif "```" in response_text:
                 response_text = response_text.split("```")[1].split("```")[0]
 
-            tasks_list = json.loads(response_text.strip())
+            cleaned_response_text = response_text.strip()
+            print(f"🧠 AI cleaned response preview: {cleaned_response_text[:300]!r}")
+
+            tasks_list = json.loads(cleaned_response_text)
 
             print(f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             print(f"📋 プロジェクト: {プロジェクト名}")
@@ -226,6 +239,8 @@ def register_task_command(
 
         except json.JSONDecodeError as e:
             print(f"❌ JSON パースエラー: {str(e)}")
+            if 'response_text' in locals():
+                print(f"🧠 AI response preview on parse error: {response_text[:500]!r}")
             await interaction.followup.send(f"❌ AI の応答をパースできませんでした\n{str(e)}")
         except Exception as e:
             print(f"❌ メインエラー: {type(e).__name__}")
