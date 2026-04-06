@@ -8,11 +8,12 @@ from dotenv import load_dotenv
 from notion_client import Client
 from openai import OpenAI
 
+load_dotenv()
+
 from src.commands.event import register_event_command
 from src.commands.task import register_task_command
 from src.services.db_service import init_db
 
-load_dotenv()
 init_db()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")

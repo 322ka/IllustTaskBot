@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import traceback
 from datetime import datetime
 from typing import Any, Callable
@@ -122,10 +123,11 @@ def register_task_command(
             print(f"📊 生成されたタスク数: {len(tasks_list)}")
             print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
-            if not notion_db_id:
+            resolved_notion_db_id = notion_db_id or os.getenv("NOTION_DATABASE_ID")
+            if not resolved_notion_db_id:
                 raise ValueError("NOTION_DATABASE_ID が設定されていません。")
 
-            title_property_name, select_options = get_database_schema_config(notion_db_id)
+            title_property_name, select_options = get_database_schema_config(resolved_notion_db_id)
             print(f"🧩 Notion title property: {title_property_name}")
 
             created_count = 0
@@ -166,7 +168,7 @@ def register_task_command(
                         properties[notion_prop_event] = event_prop
 
                     notion.pages.create(
-                        parent={"database_id": notion_db_id},
+                        parent={"database_id": resolved_notion_db_id},
                         properties=properties
                     )
 
