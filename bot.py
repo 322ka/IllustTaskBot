@@ -94,7 +94,7 @@ def build_select_property(
     return {"select": {"name": value}}
 
 
-register_event_command(bot)
+register_event_command(bot=bot, notion=notion, notion_db_id=NOTION_DB_ID)
 register_task_command(
     bot=bot,
     openai_client=openai_client,
