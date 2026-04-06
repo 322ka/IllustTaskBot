@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -115,13 +115,16 @@ def list_events(
     if client_result.client is None:
         return [], client_result.error
 
+    normalized_time_min = time_min.astimezone(timezone.utc) if time_min.tzinfo else time_min.replace(tzinfo=timezone.utc)
+    normalized_time_max = time_max.astimezone(timezone.utc) if time_max.tzinfo else time_max.replace(tzinfo=timezone.utc)
+
     try:
         response = (
             client_result.client.events()
             .list(
                 calendarId=client_result.calendar_id,
-                timeMin=time_min.isoformat(),
-                timeMax=time_max.isoformat(),
+                timeMin=normalized_time_min.isoformat().replace("+00:00", "Z"),
+                timeMax=normalized_time_max.isoformat().replace("+00:00", "Z"),
                 singleEvents=True,
                 orderBy="startTime",
                 maxResults=max_results,
