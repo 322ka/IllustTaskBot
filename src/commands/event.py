@@ -1,3 +1,5 @@
+import os
+
 import discord
 from discord.ext import commands
 
@@ -22,14 +24,15 @@ def register_event_command(bot: commands.Bot, notion, notion_db_id: str | None) 
                 raise RuntimeError("イベント設定の保存結果を確認できませんでした。")
 
             notice_lines = [f"現在のイベントを「{saved_event}」に設定しました。"]
+            resolved_notion_db_id = notion_db_id or os.getenv("NOTION_DATABASE_ID")
 
-            if not notion_db_id:
+            if not resolved_notion_db_id:
                 notice_lines.append("⚠️ Notion DB ID が未設定のため、Notion 候補同期はスキップしました。")
             else:
                 try:
                     sync_result = ensure_select_option(
                         notion=notion,
-                        database_id=notion_db_id,
+                        database_id=resolved_notion_db_id,
                         property_name=EVENT_PROPERTY_NAME,
                         option_name=event_name,
                     )
