@@ -26,13 +26,17 @@ def register_event_command(
 
         try:
             user_id = str(interaction.user.id)
+            previous_event = get_current_event(user_id)
             set_current_event(user_id, event_name)
 
             saved_event = get_current_event(user_id)
             if saved_event != event_name:
                 raise RuntimeError("イベント設定の保存結果を確認できませんでした。")
 
-            notice_lines = [f"現在のイベントを「{saved_event}」に設定しました。"]
+            if previous_event == event_name:
+                notice_lines = [f"現在のイベントはすでに「{saved_event}」です。"]
+            else:
+                notice_lines = [f"現在のイベントを「{saved_event}」に設定しました。"]
             resolved_notion_db_id = notion_db_id or os.getenv("NOTION_DATABASE_ID")
             resolved_event_database_id = event_database_id or os.getenv("EVENT_DATABASE_ID")
 
