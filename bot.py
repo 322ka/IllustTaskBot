@@ -119,21 +119,23 @@ async def add_task(
                 
                 notion.pages.create(
                     parent={"database_id": NOTION_DB_ID},
+                notion.pages.create(
+                    parent={"database_id": NOTION_DB_ID},
                     properties={
-                        "タイトル": {
+                        "作品タイトル名(...)": {
                             "title": [{"text": {"content": f"{task['task_name']}"}}]
                         },
-                        "プロジェクト": {
-                            "rich_text": [{"text": {"content": プロジェクト名}}]
+                        "カテゴリ": {
+                            "select": {"name": category}
                         },
-                        "締切": {
+                        "予定": {
                             "date": {"start": task["deadline"]}
                         },
-                        "種類": {
-                            "select": {"name": 種類}
+                        "イベント名(進捗...)": {
+                            "select": {"name": task_type}
                         },
-                        "進捗": {
-                            "select": {"name": "未開始"}
+                        "済": {
+                            "checkbox": False
                         }
                     }
                 )
