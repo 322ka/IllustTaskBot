@@ -45,7 +45,8 @@ def register_task_command(
         interaction: discord.Interaction,
         プロジェクト名: str,
         締切日: str,
-        種類: str = "依頼",
+        work_category: str,
+        work_type: str,
         event_name: str | None = None,
     ):
         await interaction.response.defer()
@@ -72,7 +73,8 @@ def register_task_command(
 【プロジェクト情報】
 - プロジェクト名: {プロジェクト名}
 - 最終締切: {締切日}
-- 種類: {種類}
+- 作業種別: {work_category}
+- 作品種別: {work_type}
 
 【ワークフロー（順序は固定）】
 1. 情報収集
@@ -195,7 +197,7 @@ def register_task_command(
                         notion=notion,
                         database_id=resolved_fanfic_database_id,
                         property_name="分類タグ",
-                        option_name=種類,
+                        option_name=work_type,
                     )
                     if fanfic_category_sync_result == "added":
                         sync_messages.append("FANFIC同期: 分類タグ候補を追加しました。")
@@ -205,7 +207,7 @@ def register_task_command(
                         database_id=resolved_fanfic_database_id,
                         work_title=プロジェクト名,
                         event_name=resolved_event_name,
-                        category_name=種類,
+                        category_name=work_type,
                     )
                     if fanfic_result == "created":
                         sync_messages.append(
@@ -238,7 +240,7 @@ def register_task_command(
                     }
 
                     category_prop = build_select_property(
-                        notion_prop_category, 種類, select_options, warning_messages
+                        notion_prop_category, work_category, select_options, warning_messages
                     )
                     if category_prop:
                         properties[notion_prop_category] = category_prop
